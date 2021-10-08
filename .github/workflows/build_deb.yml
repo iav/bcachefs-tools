@@ -1,0 +1,65 @@
+name: x64 build, check
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [ master ]
+  pull_request:
+    branches: [ master ]
+
+jobs:
+  build:
+
+    runs-on: ubuntu-latest
+
+    steps:
+    - name: Build deps install
+      uses: lyricwulf/abc@v1
+      with:
+        linux:
+          pkg-config libaio-dev libblkid-dev libkeyutils-dev
+          liblz4-dev libscrypt-dev libsodium-dev liburcu-dev libzstd-dev
+          uuid-dev zlib1g-dev valgrind libudev-dev python python3-docutils
+          libfuse3-dev python3-pytest-xdist
+          devscripts debhelper
+    - uses: actions/checkout@v2
+    - name: make
+      run: make
+    - name: make deb
+      run: make deb
+    - name: show vars
+      run: |
+          pwd
+          ls -l
+          ls -l ../
+          echo $(env)
+          echo github.workspace ${{ github.workspace }}
+	  which rst2man
+
+    - name: smoketests deps install
+      uses: lyricwulf/abc@v1
+      with:
+        linux:
+          libfuse3-dev python3-pytest-xdist valgrind
+    - name: smoke_test
+      run: bash -x ./smoke_test
+
+    # - name: Upload binaries to release
+      # uses: svenstaro/upload-release-action@v2
+      # with:
+        # repo_token: ${{ secrets.GITHUB_TOKEN }}
+        # file: ../bcachefs-tools_*
+              # ../bcachefs-tools-dbgsym*
+        # tag: ${{ github.ref }}
+        # overwrite: true
+        # file_glob: true
+
+    - name: 'Upload Artifact'
+      uses: actions/upload-artifact@v2
+      with:
+        name: debs x64 ${{ github.sha }}
+        retention-days: 10
+        path: |
+              ${{ runner.workspace }}/bcachefs-tools_*
+              ${{ runner.workspace }}/bcachefs-tools-dbgsym*
+
