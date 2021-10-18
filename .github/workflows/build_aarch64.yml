@@ -1,0 +1,98 @@
+name: aarch64 build, check
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [ master ]
+  pull_request:
+    branches: [ master ]
+
+env:
+  IMAGE_NAME: bcachefs-tools-builder
+  
+jobs:
+
+  build:
+
+    runs-on: ubuntu-latest
+    permissions:
+      packages: write
+      contents: read
+    env:
+      platform: arm64
+      buildxplatform: linux/arm64
+    outputs:
+      IMAGE_ID:  ${{ steps.setvars.outputs.IMAGE_ID }}
+      VERSION:  ${{ steps.setvars.outputs.VERSION }}
+    steps:
+
+    - name: Set up QEMU
+      uses: docker/setup-qemu-action@v2
+    - name: Docker Setup Buildx
+      id:   buildx
+      uses: docker/setup-buildx-action@v2
+    -
+        name: Inspect builder
+        run: |
+          echo "Name:      ${{ steps.buildx.outputs.name }}"
+          echo "Endpoint:  ${{ steps.buildx.outputs.endpoint }}"
+          echo "Status:    ${{ steps.buildx.outputs.status }}"
+          echo "Flags:     ${{ steps.buildx.outputs.flags }}"
+          echo "Platforms: ${{ steps.buildx.outputs.platforms }}"
+    -
+      name: Login to GitHub Container Registry
+      uses: docker/login-action@v1
+      with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+    - 
+      name: git checkout
+      uses: actions/checkout@v3
+
+    -
+        name: Prepare container names
+        id: setvars
+        run: |
+          #IMAGE_ID=$IMAGE_NAME
+          # Change all uppercase to lowercase
+          IMAGE_ID="ghcr.io/${{ github.repository_owner }}/$IMAGE_NAME:${{ env.platform }}"
+
+          echo IMAGE_ID=$IMAGE_ID
+          echo "IMAGE_ID=$IMAGE_ID" >> $GITHUB_ENV
+          echo VERSION=$VERSION
+
+          echo "IMAGE_ID=${IMAGE_ID}" >> $GITHUB_OUTPUT
+
+    - name: run build in container
+      run: |        
+          SHORTIMAGENAME="${{ env.IMAGE_ID }}"
+          echo SHORTIMAGENAME ${SHORTIMAGENAME}
+          docker run --platform ${{ env.platform }} \
+            -v ${{ runner.workspace }}:/build ${SHORTIMAGENAME} \
+            sh -c "pwd; cd /build/bcachefs-tools; ls -l; make; make deb"
+          
+    - name: show vars
+      run: |
+          pwd
+          ls -l
+          ls -l ../
+          echo $(env)
+          echo github.workspace ${{ github.workspace }}
+
+
+    - name: 'Upload Artifact'
+      uses: actions/upload-artifact@v3
+      with:
+        name: debs x64 ${{ github.sha }}
+        retention-days: 10
+        path: |
+              ${{ runner.workspace }}/bcachefs-tools_*
+              ${{ runner.workspace }}/bcachefs-tools-dbgsym*
+
+    - name: Deploy to packagecloud.io
+      uses: lpenz/ghaction-packagecloud@v0.4
+      with:
+        repository: bcachefs/ubuntu/focal
+      env:
+        PACKAGECLOUD_TOKEN: ${{ secrets.PACKAGECLOUD_TOKEN }}

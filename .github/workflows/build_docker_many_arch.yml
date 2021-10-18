@@ -1,0 +1,112 @@
+name: cross build many arch with buildx, check, .debs into artefacts
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [ master ]
+  pull_request:
+    branches: [ master ]
+
+env:
+  IMAGE_NAME: bcachefs-tools-builder
+
+jobs:
+
+  buildx-matrix:
+    runs-on: ubuntu-latest
+    env:
+        IMAGE_ID: ${{ needs.prepare_all_buildx.outputs.IMAGE_ID }}
+        VERSION: ${{ needs.prepare_all_buildx.outputs.VERSION }}
+        SHORTIMAGENAME:
+    strategy:
+        fail-fast: false
+        matrix:
+          platform: [ amd64, arm64, armv7 ]
+          include:
+            - platform: arm64
+              buildxplatform: linux/arm64
+            - platform: amd64
+              buildxplatform: linux/amd64
+            - platform: armv7
+              buildxplatform: linux/arm/v7
+              strategy.continue-on-error: true
+    steps:
+
+    - name: Set up QEMU
+      uses: docker/setup-qemu-action@v2
+    - name: Docker Setup Buildx
+      id:   buildx
+      uses: docker/setup-buildx-action@v2
+    -
+        name: Inspect builder
+        run: |
+          echo "Name=${{ steps.buildx.outputs.name }}" >> $GITHUB_OUTPUT
+          echo "Endpoint=${{ steps.buildx.outputs.endpoint }}" >> $GITHUB_OUTPUT
+          echo "Status=${{ steps.buildx.outputs.status }}" >> $GITHUB_OUTPUT
+          echo "Flags=${{ steps.buildx.outputs.flags }}" >> $GITHUB_OUTPUT
+          echo "Platforms=${{ steps.buildx.outputs.platforms }}" >> $GITHUB_OUTPUT
+    -
+      name: Login to GitHub Container Registry
+      uses: docker/login-action@v2
+      with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+    -
+      name: git checkout
+      uses: actions/checkout@v3
+
+    -
+        name: Prepare container names
+        id: setvars
+        run: |
+          #IMAGE_ID=$IMAGE_NAME
+          # Change all uppercase to lowercase
+          IMAGE_ID="ghcr.io/${{ github.repository_owner }}/$IMAGE_NAME"
+          SHORTIMAGENAME="${IMAGE_ID}:${{ matrix.platform }}"
+          echo IMAGE_ID=$IMAGE_ID
+          echo "IMAGE_ID=$IMAGE_ID" >> $GITHUB_ENV
+          echo SHORTIMAGENAME: ${SHORTIMAGENAME}
+          echo "SHORTIMAGENAME=$SHORTIMAGENAME" >> $GITHUB_ENV
+          echo VERSION=$VERSION
+
+          echo "IMAGE_ID=${IMAGE_ID}" >> $GITHUB_OUTPUT
+          echo "SHORTIMAGENAME=${SHORTIMAGENAME}"  >> $GITHUB_OUTPUT
+
+    - name: run build in container ${{ matrix.platform }}
+      run: |
+          #SHORTIMAGENAME="${IMAGE_ID}:${{ matrix.platform }}"
+          echo SHORTIMAGENAME ${SHORTIMAGENAME}
+          docker run --platform ${{ matrix.buildxplatform }} \
+            -v ${{ runner.workspace }}:/build ${SHORTIMAGENAME} \
+            sh -c "pwd; cd /build/bcachefs-tools; make; make deb "
+
+    # - name: show vars
+      # run: |
+          # pwd
+          # ls -l
+          # ls -l ../
+          # echo $(env)
+          # echo github.workspace ${{ github.workspace }}
+
+
+    - name: 'Upload Artifact'
+      uses: actions/upload-artifact@v3
+      with:
+        name: bcachefs-tools_debs_${{ matrix.platform }}-${{ github.sha }}
+        retention-days: 10
+        path: |
+              ${{ runner.workspace }}/bcachefs-tools_*
+              ${{ runner.workspace }}/bcachefs-tools-dbgsym*
+
+    - name: move debs into workdir
+      run: |
+          mkdir debs
+          cp ../*deb debs/
+
+    - name: Deploy to packagecloud.io
+      uses: lpenz/ghaction-packagecloud@v0.4
+      with:
+        repository: bcachefs/ubuntu/jammy
+      env:
+        PACKAGECLOUD_TOKEN: ${{ secrets.PACKAGECLOUD_TOKEN }}
