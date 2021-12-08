@@ -3,4 +3,7 @@
 #![allow(non_snake_case)]
 #![allow(unused)]
 
+pub mod keyutils;
+pub use keyutils::*;
+
 include!(concat!(env!("OUT_DIR"), "/keyutils.rs"));

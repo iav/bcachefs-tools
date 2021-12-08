@@ -1,10 +1,4 @@
-#![allow(non_upper_case_globals)]
-#![allow(non_camel_case_types)]
-#![allow(non_snake_case)]
-#![allow(unused)]
-
-include!(concat!(env!("OUT_DIR"), "/bcachefs.rs"));
-
+use super::*;
 use bitfield::bitfield;
 bitfield! {
 	pub struct bch_scrypt_flags(u64);
@@ -32,11 +26,11 @@ impl bch_sb_field_crypt {
 impl PartialEq for bch_sb {
 	fn eq(&self, other: &Self) -> bool {
 		self.magic.b == other.magic.b
-		&& self.user_uuid.b == other.user_uuid.b
-		&& self.block_size == other.block_size
-		&& self.version == other.version
-		&& self.uuid.b == other.uuid.b
-		&& self.seq == other.seq
+			&& self.user_uuid.b == other.user_uuid.b
+			&& self.block_size == other.block_size
+			&& self.version == other.version
+			&& self.uuid.b == other.uuid.b
+			&& self.seq == other.seq
 	}
 }
 
@@ -50,10 +44,9 @@ impl std::fmt::Debug for bch_sb {
 			.field("seq", &self.seq)
 			.field("csum", &(self.csum.lo, self.csum.hi))
 			.field("offset", &self.offset)
-		.finish_non_exhaustive()
-    }
+			.finish_non_exhaustive()
+	}
 }
-
 
 impl bch_sb {
 	pub fn crypt(&self) -> Option<&bch_sb_field_crypt> {
@@ -119,6 +112,8 @@ pub struct bch_extent_crc32 {
 	pub csum: __u32,
 }
 
-// #[repr(u8)]
-pub enum rhash_lock_head {}
-pub enum srcu_struct {}
+
+// extern "C" {
+// 	fn dev_mounted(device: *const std::os::raw::c_char) -> i32;
+// 	// pub fn
+// }
