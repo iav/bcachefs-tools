@@ -6,3 +6,7 @@ edition = "2018"
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 [lib]
 crate-type = [ "staticlib" ] 
+
+[build-dependencies]
+cbindgen = "0.20.0"
+pkg-config = "0.3"
