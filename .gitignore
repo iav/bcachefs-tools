@@ -1,10 +1,13 @@
+# build artifacts
 /result
-bcachefs
-bcachefs.5
+/bcachefs
+/bcachefs.5
+
 .*
 *.o
 *.d
 *.a
+
 tags
 TAGS
 cscope*
