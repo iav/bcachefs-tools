@@ -5,7 +5,7 @@
 , buildLinux
 , commit
 , sha256 ? lib.fakeSha256
-, kernelVersion ? "5.13.0"
+, kernelVersion ? "5.15.0"
 , kernelPatches ? [] # must always be defined in bcachefs' all-packages.nix entry because it's also a top-level attribute supplied by callPackage
 , argsOverride ? {}
 , versionString ? (builtins.substring 0 8 commit)
