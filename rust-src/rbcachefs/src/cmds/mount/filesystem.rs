@@ -1,3 +1,4 @@
+use crate::c::bcachefs;
 extern "C" {
 	pub static stdout: *mut libc::FILE;
 }
@@ -32,13 +33,7 @@ use std::fmt;
 impl std::fmt::Display for FileSystem {
 	fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
 		let devs = self.device_string();
-		write!(
-			f,
-			"{:?}: locked?={lock} ({}) ",
-			self.uuid,
-			devs,
-			lock = self.encrypted
-		)
+		write!(f, "{:?}: locked?={lock} ({}) ", self.uuid, devs, lock = self.encrypted)
 	}
 }
 
@@ -57,11 +52,7 @@ impl FileSystem {
 		self.devices.iter().map(|d| d.display()).join(":")
 	}
 
-	pub fn mount(
-		&self,
-		target: impl AsRef<std::path::Path>,
-		options: impl AsRef<str>,
-	) -> anyhow::Result<()> {
+	pub fn mount(&self, target: impl AsRef<std::path::Path>, options: impl AsRef<str>) -> anyhow::Result<()> {
 		tracing::info_span!("mount").in_scope(|| {
 			let src = self.device_string();
 			let (data, mountflags) = parse_mount_options(options);
@@ -98,21 +89,22 @@ fn mount_inner(
 		data.as_c_str().to_bytes_with_nul().as_ptr() as *const c_void
 	});
 	let fstype = fstype.as_c_str().to_bytes_with_nul().as_ptr() as *const c_char;
-	
-	let ret = {let _entered = tracing::info_span!("libc::mount").entered();
+
+	let ret = {
+		let _entered = tracing::info_span!("libc::mount").entered();
 		tracing::info!("mounting filesystem");
 		// REQUIRES: CAP_SYS_ADMIN
 		unsafe { libc::mount(src, target, fstype, mountflags, data) }
 	};
 	match ret {
 		0 => Ok(()),
-		_ => Err(crate::ErrnoError(errno::errno()).into()),
+		_ => Err(crate::cmds::mount::ErrnoError(errno::errno()).into()),
 	}
 }
 
 /// Parse a comma-separated mount options and split out mountflags and filesystem
 /// specific options.
-#[tracing_attributes::instrument(skip(options))]
+#[tracing::instrument(skip(options))]
 fn parse_mount_options(options: impl AsRef<str>) -> (Option<String>, u64) {
 	use either::Either::*;
 	tracing::debug!(msg="parsing mount options", options=?options.as_ref());
@@ -155,11 +147,12 @@ fn parse_mount_options(options: impl AsRef<str>) -> (Option<String>, u64) {
 	)
 }
 
-use bch_bindgen::bcachefs;
+// use bch_bindgen::bcachefs;
+// use crate::bcachefs::c::
 use std::collections::HashMap;
 use uuid::Uuid;
 
-#[tracing_attributes::instrument]
+#[tracing::instrument]
 pub fn probe_filesystems() -> anyhow::Result<HashMap<Uuid, FileSystem>> {
 	tracing::trace!("enumerating udev devices");
 	let mut udev = udev::Enumerator::new()?;
@@ -167,37 +160,39 @@ pub fn probe_filesystems() -> anyhow::Result<HashMap<Uuid, FileSystem>> {
 	udev.match_subsystem("block")?; // find kernel block devices
 
 	let mut fs_map = HashMap::new();
-	let devresults = 
-			udev.scan_devices()?
-			.into_iter()
-			.filter_map(|dev| dev.devnode().map(ToOwned::to_owned));
-	
+	let devresults = udev
+		.scan_devices()?
+		.into_iter()
+		.filter_map(|dev| dev.devnode().map(ToOwned::to_owned));
+
 	for pathbuf in devresults {
 		match get_super_block_uuid(&pathbuf)? {
+			Ok((uuid_key, superblock)) => {
+				let fs = fs_map.entry(uuid_key).or_insert_with(|| {
+					tracing::info!(msg="found bcachefs pool", uuid=?uuid_key);
+					FileSystem::new(superblock)
+				});
 
-				Ok((uuid_key, superblock)) => {
-					let fs = fs_map.entry(uuid_key).or_insert_with(|| {
-						tracing::info!(msg="found bcachefs pool", uuid=?uuid_key);
-						FileSystem::new(superblock)
-					});
-
-					fs.devices.push(pathbuf);
-				},
-
-				Err(e) => { tracing::debug!(inner2_error=?e);}
+				fs.devices.push(pathbuf);
+			},
+			_ => {},
 		}
 	}
 
-	
-	tracing::info!(msg = "found filesystems", count = fs_map.len());
+	tracing::info!(
+		count = fs_map.len(),
+		probe_results=?&fs_map.keys(),
+	);
 	Ok(fs_map)
 }
 
-// #[tracing_attributes::instrument(skip(dev, fs_map))]
+// #[tracing::instrument(skip(dev, fs_map))]
 fn get_super_block_uuid(path: &std::path::Path) -> std::io::Result<std::io::Result<(Uuid, bcachefs::bch_sb_handle)>> {
-	let sb = bch_bindgen::rs::read_super(&path)?;
-	let super_block = match sb { 
-		Err(e) => { return Ok(Err(e)); }
+	let sb = crate::rbcachefs::super_io::read_super(&path)?;
+	let super_block = match sb {
+		Err(e) => {
+			return Ok(Err(e));
+		}
 		Ok(sb) => sb,
 	};
 

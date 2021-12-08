@@ -1,15 +1,9 @@
+pub mod filesystem;
+pub mod key;
+pub mod main;
+
 use anyhow::anyhow;
 use structopt::StructOpt;
-
-pub mod err {
-	pub enum GError {
-		Unknown{
-			message: std::borrow::Cow<'static, String>
-		 }
-	}
-	pub type GResult<T, E, OE> =::core::result::Result< ::core::result::Result<T, E>, OE>;
-	pub type Result<T, E> = GResult<T, E, GError>;
-}
 
 #[macro_export]
 macro_rules! c_str {
@@ -62,6 +56,7 @@ impl std::str::FromStr for KeyLoc {
 
 #[derive(StructOpt, Debug)]
 /// Mount a bcachefs filesystem by its UUID.
+#[structopt(name="mount.bcachefs")]
 pub struct Options {
 	/// Where the password would be loaded from.
 	///
@@ -73,7 +68,7 @@ pub struct Options {
 	pub key_location: KeyLoc,
 
 	/// External UUID of the bcachefs filesystem
-	pub uuid: uuid::Uuid,
+	pub uuid: Option<uuid::Uuid>,
 
 	/// Where the filesystem should be mounted. If not set, then the filesystem
 	/// won't actually be mounted. But all steps preceeding mounting the
@@ -84,8 +79,5 @@ pub struct Options {
 	#[structopt(short, default_value = "")]
 	pub options: String,
 }
-
-pub mod filesystem;
-pub mod key;
 
 // pub fn mnt_in_use()

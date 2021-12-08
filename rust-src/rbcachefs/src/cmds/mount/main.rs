@@ -1,37 +1,32 @@
-fn main() {
-	// convert existing log statements to tracing events
-	// tracing_log::LogTracer::init().expect("logtracer init failed!");
-	// format tracing log data to env_logger like stdout
-	tracing_subscriber::fmt::init();
-
-	if let Err(e) = crate::main_inner() {
-		tracing::error!(fatal_error = ?e);
-	}
+#[no_mangle]
+pub extern "C" fn RS_mount_main() -> i32 {
+	crate::call_err_fn_for_c(|| main_inner())
 }
 
-
-
-#[tracing_attributes::instrument("main")]
+#[tracing::instrument("main")]
 pub fn main_inner() -> anyhow::Result<()> {
+	use crate::cmds::mount::{filesystem, key, Options};
 	use structopt::StructOpt;
-	use bcachefs_mount::{Options, filesystem, key};
 	unsafe {
-		libc::setvbuf(
-			filesystem::stdout,
-			std::ptr::null_mut(),
-			libc::_IONBF,
-			0,
-		);
+		libc::setvbuf(filesystem::stdout, std::ptr::null_mut(), libc::_IONBF, 0);
 		// libc::fflush(filesystem::stdout);
 	}
+
 	let opt = Options::from_args();
 
-	
 	tracing::trace!(?opt);
 
 	let fss = filesystem::probe_filesystems()?;
+
+	let selected_uuid = match &opt.uuid {
+		Some(uuid) => uuid,
+		None => {
+			tracing::info!("Probed Filesystems, Exiting");
+			return Ok(());
+		}
+	};
 	let fs = fss
-		.get(&opt.uuid)
+		.get(selected_uuid)
 		.ok_or_else(|| anyhow::anyhow!("filesystem was not found"))?;
 
 	tracing::info!(msg="found filesystem", %fs);
