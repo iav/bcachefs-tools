@@ -1,5 +1,6 @@
 pub mod c;
 pub mod cmds;
+pub mod rbcachefs;
 
 type RResult<T> = std::io::Result<std::io::Result<T>>;
 
