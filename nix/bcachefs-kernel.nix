@@ -22,7 +22,7 @@ buildLinux {
 	
 
 	src = fetchFromGitHub {
-		name = "bcachefs-kernel-src";
+		name = "${commit}-bch-kernel-src";	
 		owner = "koverstreet";
 		repo = "bcachefs";
 		rev = commit;
