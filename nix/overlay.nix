@@ -1,9 +1,22 @@
 { filter, self, ... }:
 final: prev: {
 	bcachefs = {
+		srcs.tools = filter.lib.filter {
+			name = "bcachefs-tools";
+			root = ../.;
+			exclude = [
+				./rust-src
+				
+				./.git
+				./nix
+				
+				./flake.nix
+				./flake.lock
+			];
+		};
+
 		tools = final.callPackage ../default.nix {
 			testWithValgrind = false;
-			filter = filter.lib;
 			lastModified = builtins.substring 0 8 self.lastModifiedDate;
 			versionString = self.version;
 		};

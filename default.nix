@@ -1,5 +1,4 @@
 { lib
-, filter
 
 , stdenv
 , pkg-config
@@ -20,6 +19,7 @@
 , docutils
 , nixosTests
 
+, bcachefs
 , lastModified
 , versionString ? lastModified
 
@@ -40,19 +40,7 @@ stdenv.mkDerivation {
 	version = "v0.1-flake-${versionString}";
 	VERSION = "v0.1-flake-${versionString}";
 	
-	src = filter.filter {
-		name = "bcachefs-tools";
-		root = ./.;
-		exclude = [
-			./rust-src
-			
-			./.git
-			./nix
-			
-			./flake.nix
-			./flake.lock
-		];
-	};
+	src = bcachefs.srcs.tools;
 
 	postPatch = "patchShebangs --build doc/macro2rst.py";
 
