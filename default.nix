@@ -34,11 +34,12 @@
 
 assert fuseSupport -> fuse3 != null;
 assert testWithValgrind -> valgrind != null;
+let gitTag = "v0.1"; version = "${gitTag}-flake-${versionString}"; in
 stdenv.mkDerivation {
 	pname = "bcachefs-tools";
 
-	version = "v0.1-flake-${versionString}";
-	VERSION = "v0.1-flake-${versionString}";
+	inherit version;
+	VERSION = version;
 	
 	src = bcachefs.srcs.tools;
 
