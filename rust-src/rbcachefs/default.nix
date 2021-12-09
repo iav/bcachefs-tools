@@ -16,25 +16,35 @@
 , libuuid
 , zlib # zlib1g
 , libscrypt
+, util-linux
 
 , rustfmt
 
 , glibc
 , ...
 }: let 
-	include = {
-		glibc = "${glibc.dev}/include";
-		clang = let libc = llvmPackages.libclang; in
-			"${libc.lib}/lib/clang/${libc.version}/include";
-		urcu = "${liburcu}/include";
-		zstd = "${zstd.dev}/include";
-	};
+	include = let 
+		convertToIncludes = map (inc: "-I"+inc);
+		catStrings = lib.concatStringsSep " ";
+		makeIncludes = i: catStrings (convertToIncludes (builtins.attrValues i));
+		in makeIncludes {
+			glibc = "${glibc.dev}/include";
+			clang = let libc = llvmPackages.libclang; in
+				"${libc.lib}/lib/clang/${libc.version}/include";
+			urcu = "${liburcu}/include";
+			zstd = "${zstd.dev}/include";
+			blkid = "${util-linux.dev}/include/blkid";
+			util-linux = "${util-linux.dev}/include";
+			bcachefs = "${bcachefs.srcs.tools}";
+			bcachefs-include = "${bcachefs.srcs.tools}/include";
+		};
+
 	cargo = lib.trivial.importTOML ./Cargo.toml;
 in rustPlatform.buildRustPackage {
 	pname = cargo.package.name;
 	version = cargo.package.version;
 	
-	src = builtins.path { path = ./.; name = "bch_bindgen"; };
+	src = builtins.path { path = ./.; inherit (cargo.package) name; };
 
 	cargoLock = { lockFile = ./Cargo.lock; };
 
@@ -52,22 +62,19 @@ in rustPlatform.buildRustPackage {
 		udev
 		libscrypt
 		libaio
+		util-linux.dev
 	];
+
+	postInstall = ''
+		mkdir $out/include
+		cp $src/include/* $out/include
+	'';
 	
-	LIBBCACHEFS_LIB ="${bcachefs.tools}/lib";
-	LIBBCACHEFS_INCLUDE = bcachefs.tools.src;
 	LIBCLANG_PATH = "${llvmPackages.libclang.lib}/lib";
 	BINDGEN_EXTRA_CLANG_ARGS = lib.replaceStrings ["\n" "\t"] [" " ""] ''
 		-std=gnu99
-		-I${include.glibc}
-		-I${include.clang}
-		-I${include.urcu}
-		-I${include.zstd}
-	'';
-
-	postPatch = ''
-		cp ${./Cargo.lock} Cargo.lock
-	'';
+	'' + include;
+		# -llibblkid
 	
 
 	doCheck = true;
