@@ -77,6 +77,10 @@
 				mount-musl = pkgs.pkgsMusl.bcachefs.mount;
 			};
 
+			hydraJobs = checks // {
+				kernel = pkgs.bcachefs.kernel;
+			};
+
 			checks = { 
 				kernelSrc = packages.kernel.src;
 				inherit (packages) 
