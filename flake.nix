@@ -2,7 +2,7 @@
 	description = "Userspace tools for bcachefs";
 
 	# Nixpkgs / NixOS version to use.
-	inputs.nixpkgs.url = "github:nixos/nixpkgs/nixos-unstable";
+	inputs.nixpkgs.url = "github:nixos/nixpkgs/nixos-21.11";
 	inputs.utils.url = "github:numtide/flake-utils";
 	inputs.filter.url = "github:numtide/nix-filter";
 
