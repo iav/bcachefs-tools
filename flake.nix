@@ -16,7 +16,7 @@
 
 			overlay = import ./nix/overlay.nix inputs;
 			nixosModule = self.nixosModules.bcachefs;
-			nixosModules.bcachefs = import ./rust-src/mount/module.nix;
+			nixosModules.bcachefs = import ./nix/module.nix;
 			nixosModules.bcachefs-enable-boot = ({config, pkgs, lib, ... }:{
 				# Disable Upstream NixOS Module when this is in use
 				disabledModules = [ "tasks/filesystems/bcachefs.nix" ];

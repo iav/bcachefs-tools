@@ -16,11 +16,7 @@ in
 		default = pkgs.bcachefs.tools;
 		type = lib.types.package;
 	};
-	options.filesystems.bcachefs.packages.mount = lib.mkOption {
-		description = "Which package to use to link in the bcachefs mount package";
-		default = pkgs.bcachefs.mount;
-		type = lib.types.package;
-	};
+
 	options.filesystems.bcachefs.packages.kernelPackages = lib.mkOption {
 		description = "Which package to use to link in the kernel package to use";
 		default = pkgs.bcachefs.kernelPackages;
@@ -30,7 +26,7 @@ in
 
 	config = mkIf (elem "bcachefs" config.boot.supportedFilesystems) (mkMerge [
 		{
-			system.fsPackages = [ cfg.packages.tools cfg.packages.mount ];
+			system.fsPackages = [ cfg.packages.tools ];
 
 			# use kernel package with bcachefs support until it's in mainline
 			boot.kernelPackages = cfg.packages.kernelPackages;
@@ -43,7 +39,7 @@ in
 
 			boot.initrd.extraUtilsCommands = ''
 				copy_bin_and_libs ${cfg.packages.tools}/bin/bcachefs
-				copy_bin_and_libs ${cfg.packages.mount}/bin/mount.bcachefs
+				copy_bin_and_libs ${cfg.packages.tools}/bin/mount.bcachefs
 			'';
 			boot.initrd.extraUtilsCommandsTest = ''
 				$out/bin/bcachefs version
