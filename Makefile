@@ -23,8 +23,8 @@ LDFLAGS+=$(CFLAGS) $(EXTRA_LDFLAGS)
 ## Configure Tools
 PYTEST_ARGS?=
 PYTEST_CMD?=$(shell \
-	command -v pytest-3 \
-	|| which pytest-3 \
+	command -v pytest-3 2>/dev/null \
+	|| which pytest-3 2>/dev/null \
 )
 PYTEST:=$(PYTEST_CMD) $(PYTEST_ARGS)
 
