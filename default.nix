@@ -45,6 +45,10 @@ stdenv.mkDerivation {
 
 	postPatch = "patchShebangs --build doc/macro2rst.py";
 
+	RS_INCLUDE="${bcachefs.rbcachefs}/include";
+	preBuild = ''
+		cp --reflink=auto ${bcachefs.rbcachefs}/lib/librbcachefs.a .
+	'';
 	nativeBuildInputs = [
 		# used to find dependencies
 		## see ./INSTALL
