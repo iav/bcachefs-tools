@@ -109,7 +109,7 @@ SRCS=$(shell find . -type f -iname '*.c')
 DEPS=$(SRCS:.c=.d)
 -include $(DEPS)
 
-OBJS=$(SRCS:.c=.o)
+OBJS=$(SRCS:.c=.o) librbcachefs.a
 bcachefs: $(filter-out ./tests/%.o, $(OBJS))
 
 RUST_SRCS=$(shell find rust-src/ -type f -iname '*.rs')
@@ -119,6 +119,9 @@ debug: CFLAGS+=-Werror -DCONFIG_BCACHEFS_DEBUG=y -DCONFIG_VALGRIND=y
 debug: bcachefs
 
 
+librbcachefs.a: $(RUST_SRCS)
+	$(CARGO_BUILD) --manifest-path rust-src/rbcachefs/Cargo.toml
+	$(LN) -f rust-src/rbcachefs/target/$(CARGO_PROFILE_DIR)/librbcachefs.a $@
 
 tests/test_helper: $(filter ./tests/%.o, $(OBJS))
 
