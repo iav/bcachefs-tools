@@ -170,6 +170,17 @@ static int subvolume_cmds(int argc, char *argv[])
 
 #include <rbcachefs_bindings.h>
 
+static bool str_ends_with(char *lhs, char *rhs) {
+	u_int16_t llen = strlen(lhs);
+	u_int16_t rlen = strlen(rhs);
+	
+	if ( llen < rlen ) { return false; }
+
+	char *tmp = &lhs[llen - rlen];
+	return strcmp(tmp, rhs) == 0;
+
+}
+
 int main(int argc, char *argv[])
 {
 	raid_init();
@@ -177,6 +188,11 @@ int main(int argc, char *argv[])
 	full_cmd = argv[0];
 
 	setvbuf(stdout, NULL, _IOLBF, 0);
+
+	// Multi Call Binary
+	if (str_ends_with(full_cmd, "mount.bcachefs")) {
+		return RS_mount_main();
+	}
 
 	char *cmd = pop_cmd(&argc, &argv);
 	if (argc < 1) {
