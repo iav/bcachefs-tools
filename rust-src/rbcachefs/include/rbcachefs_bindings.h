@@ -9,4 +9,9 @@
 #include <stdint.h>
 #include <stdlib.h>
 
+
+#define RBCH_SUPERBLOCK_MAGIC 263880070639002465776974858631536864641ULL
+
+int32_t RS_mount_main(void);
+
 #endif /* RBCACHEFS_H */
