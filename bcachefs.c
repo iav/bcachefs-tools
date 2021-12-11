@@ -90,11 +90,11 @@ static void usage(void)
 
 static char *full_cmd;
 
-static char *pop_cmd(int *argc, char *argv[])
+static char *pop_cmd(int *argc, char **argv[])
 {
-	char *cmd = argv[1];
-	if (!(*argc < 2))
-		memmove(&argv[1], &argv[2], *argc * sizeof(argv[0]));
+	char *cmd = (*argv)[1];
+	if (!(*argc < 2)) 
+		(*argv)++;
 	(*argc)--;
 
 	full_cmd = mprintf("%s %s", full_cmd, cmd);
@@ -103,7 +103,7 @@ static char *pop_cmd(int *argc, char *argv[])
 
 static int fs_cmds(int argc, char *argv[])
 {
-	char *cmd = pop_cmd(&argc, argv);
+	char *cmd = pop_cmd(&argc, &argv);
 
 	if (argc < 1)
 		return fs_usage();
@@ -115,7 +115,7 @@ static int fs_cmds(int argc, char *argv[])
 
 static int device_cmds(int argc, char *argv[])
 {
-	char *cmd = pop_cmd(&argc, argv);
+	char *cmd = pop_cmd(&argc, &argv);
 
 	if (argc < 1)
 		return device_usage();
@@ -141,7 +141,7 @@ static int device_cmds(int argc, char *argv[])
 
 static int data_cmds(int argc, char *argv[])
 {
-	char *cmd = pop_cmd(&argc, argv);
+	char *cmd = pop_cmd(&argc, &argv);
 
 	if (argc < 1)
 		return data_usage();
@@ -155,7 +155,7 @@ static int data_cmds(int argc, char *argv[])
 
 static int subvolume_cmds(int argc, char *argv[])
 {
-	char *cmd = pop_cmd(&argc, argv);
+	char *cmd = pop_cmd(&argc, &argv);
 	if (argc < 1)
 		return subvolume_usage();
 	if (!strcmp(cmd, "create"))
@@ -168,6 +168,8 @@ static int subvolume_cmds(int argc, char *argv[])
 	return 0;
 }
 
+#include <rbcachefs_bindings.h>
+
 int main(int argc, char *argv[])
 {
 	raid_init();
@@ -176,7 +178,7 @@ int main(int argc, char *argv[])
 
 	setvbuf(stdout, NULL, _IOLBF, 0);
 
-	char *cmd = pop_cmd(&argc, argv);
+	char *cmd = pop_cmd(&argc, &argv);
 	if (argc < 1) {
 		puts("missing command\n");
 		goto usage;
