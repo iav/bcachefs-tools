@@ -86,6 +86,8 @@ endif
 .PHONY: all
 all: bcachefs
 
+.PHONY: rust
+rust:  mount.bcachefs
 
 .PHONY: tests
 tests: tests/test_helper
@@ -111,6 +113,10 @@ DEPS=$(SRCS:.c=.d)
 
 OBJS=$(SRCS:.c=.o) librbcachefs.a
 bcachefs: $(filter-out ./tests/%.o, $(OBJS))
+
+
+mount.bcachefs: bcachefs
+	$(LN) -f $+ $@
 
 RUST_SRCS=$(shell find rust-src/ -type f -iname '*.rs')
 MOUNT_SRCS=$(filter %mount, $(RUST_SRCS))
@@ -141,6 +147,7 @@ install: INITRAMFS_SCRIPT=$(INITRAMFS_DIR)/scripts/local-premount/bcachefs
 install: bcachefs
 	$(INSTALL) -m0755 -D bcachefs      -t $(DESTDIR)$(ROOT_SBINDIR)
 	$(INSTALL) -m0755    fsck.bcachefs    $(DESTDIR)$(ROOT_SBINDIR)
+	$(LN) -s $(DESTDIR)$(ROOT_SBINDIR)/bcachefs $(DESTDIR)$(ROOT_SBINDIR)/mount.bcachefs
 	$(INSTALL) -m0755    mkfs.bcachefs    $(DESTDIR)$(ROOT_SBINDIR)
 	$(INSTALL) -m0644 -D bcachefs.8    -t $(DESTDIR)$(PREFIX)/share/man/man8/
 	$(INSTALL) -m0755 -D initramfs/script $(DESTDIR)$(INITRAMFS_SCRIPT)
