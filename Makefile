@@ -33,12 +33,8 @@ PYTEST:=$(PYTEST_CMD) $(PYTEST_ARGS)
 
 CARGO_ARGS=
 CARGO=cargo $(CARGO_ARGS)
-# default is debug
-# set to debug for default profile
-# CARGO_PROFILE_DIR?=debug
+
 CARGO_PROFILE_DIR?=release
-# Unset for default profile
-# CARGO_PROFILE?=
 CARGO_PROFILE?=--release
 
 CARGO_BUILD_ARGS=$(CARGO_PROFILE)
@@ -122,10 +118,12 @@ RUST_SRCS=$(shell find rust-src/ -type f -iname '*.rs')
 MOUNT_SRCS=$(filter %mount, $(RUST_SRCS))
 
 debug: CFLAGS+=-Werror -DCONFIG_BCACHEFS_DEBUG=y -DCONFIG_VALGRIND=y
+debug: CARGO_PROFILE_DIR=debug
+debug: CARGO_PROFILE=
 debug: bcachefs
 
-
 librbcachefs.a: $(RUST_SRCS)
+	BINDGEN_EXTRA_CLANG_ARGS="$(BINDGEN_EXTRA_CLANG_ARGS) $(CFLAGS)" \
 	$(CARGO_BUILD) --manifest-path rust-src/rbcachefs/Cargo.toml
 	$(LN) -f rust-src/rbcachefs/target/$(CARGO_PROFILE_DIR)/librbcachefs.a $@
 
