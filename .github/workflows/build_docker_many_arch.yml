@@ -28,9 +28,9 @@ jobs:
             - platform: amd64
               buildxplatform: linux/amd64
               strategy.fail-fast: true
-            - platform: armv7
-              buildxplatform: linux/arm/v7
-              strategy.fail-fast: false
+#            - platform: armv7
+#              buildxplatform: linux/arm/v7
+#              strategy.fail-fast: false
     steps:
 
     - name: Set up QEMU
@@ -80,7 +80,7 @@ jobs:
           echo SHORTIMAGENAME ${SHORTIMAGENAME}
           docker run --platform ${{ matrix.buildxplatform }} \
             -v ${{ runner.workspace }}:/build ${SHORTIMAGENAME} \
-            sh -c "pwd; cd /build/bcachefs-tools; make; make deb "
+            sh -c "pwd; cd /build/bcachefs-tools; make; make mount.bcachefs; make deb "
 
     - name: show vars
       run: |
