@@ -20,7 +20,7 @@ jobs:
         SHORTIMAGENAME:
     strategy:
         matrix:
-          platform: [ amd64, arm64, armv7 ]
+          platform: [ amd64, arm64 ]
           include:
             - platform: arm64
               buildxplatform: linux/arm64
@@ -94,7 +94,7 @@ jobs:
     - name: 'Upload Artifact'
       uses: actions/upload-artifact@v2
       with:
-        name: bcachefs-tools_debs_${{ matrix.platform }} ${{ github.sha }}
+        name: bcachefs-tools_debs_${{ matrix.platform }}-${{ github.sha }}
         retention-days: 10
         path: |
               ${{ runner.workspace }}/bcachefs-tools_*
