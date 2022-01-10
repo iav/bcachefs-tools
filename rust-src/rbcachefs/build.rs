@@ -3,11 +3,11 @@ use std::{env, path::{Path, PathBuf}};
 fn main() {
 	cbindgen();
 	bch_bindgen();
+	let crate_dir: PathBuf = env::var("CARGO_MANIFEST_DIR").expect("envvar `CARGO_MANIFEST_DIR` not specified").into();
 }
 
 /// Generate bindings that C can use to call into the rust binary
 fn cbindgen() {
-	let crate_dir = env::var("CARGO_MANIFEST_DIR").expect("envvar `CARGO_MANIFEST_DIR` not specified");
 
 	cbindgen::generate(crate_dir)
 		.expect("Unable to generate bindings")
