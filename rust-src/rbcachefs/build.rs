@@ -38,13 +38,10 @@ fn libbcachefs_bindings(output_dir: &Path, crate_dir: &Path, libbcachefs_src: &P
 				.display()
 				.to_string(),
 		)
-		.clang_args([
-			libbcachefs_src.display(),
-			libbcachefs_src.join("include").display()
-		].iter().map(|i| format!("-I{}", i)))
-		.clang_arg("-DZSTD_STATIC_LINKING_ONLY")
-		.clang_arg("-DNO_BCACHEFS_FS")
-		.clang_arg("-D_GNU_SOURCE")
+		// Provided by CFLAGS from Makefile
+		// Because we are dependent on the "Makefile", we do not add clang args here that are present in the CFLAGS variable which we expect to have passed to us in some form 
+
+		.clang_arg("-v")
 		.derive_debug(true)
 		.derive_default(true)
 		.derive_eq(true)
