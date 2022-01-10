@@ -3,13 +3,14 @@ PKG_CONFIG?=pkg-config
 INSTALL=install
 LN=ln
 
-RS_INCLUDE?=./rust-src/rbcachefs/include
+BCACHEFSTOOLS_PATH?=$(shell pwd)
+BCACHEFSTOOLS_RS_PATH?=$(BCACHEFSTOOLS_PATH)/rust-src/rbcachefs/include
 CFLAGS+=-std=gnu89 -O2 -g -MMD -Wall -fPIC				\
 	-Wno-pointer-sign					\
 	-fno-strict-aliasing					\
 	-fno-delete-null-pointer-checks				\
-	-I. -Iinclude -Iraid					\
-	-I$(RS_INCLUDE) \
+	-I$(BCACHEFSTOOLS_PATH) -I$(BCACHEFSTOOLS_PATH)/include -I$(BCACHEFSTOOLS_PATH)/raid					\
+	-I$(BCACHEFSTOOLS_RS_PATH)						\
 	-D_FILE_OFFSET_BITS=64					\
 	-D_GNU_SOURCE						\
 	-D_LGPL_SOURCE						\
