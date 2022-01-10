@@ -1,4 +1,4 @@
-use std::{env, path::Path};
+use std::{env, path::{Path, PathBuf}};
 
 fn main() {
 	cbindgen();
@@ -16,7 +16,6 @@ fn cbindgen() {
 
 /// Generate bindings from C that rust can use to call into the C binary
 fn bch_bindgen() {
-	use std::path::PathBuf;
 	// use std::process::Command;
 
 	let out_dir: PathBuf = std::env::var_os("OUT_DIR").expect("ENV Var 'OUT_DIR' Expected").into();
