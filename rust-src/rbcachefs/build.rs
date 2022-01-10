@@ -1,13 +1,13 @@
 use std::{env, path::{Path, PathBuf}};
 
 fn main() {
-	cbindgen();
-	bch_bindgen();
 	let crate_dir: PathBuf = env::var("CARGO_MANIFEST_DIR").expect("envvar `CARGO_MANIFEST_DIR` not specified").into();
+	cbindgen(&crate_dir);
+	bch_bindgen(&crate_dir);
 }
 
 /// Generate bindings that C can use to call into the rust binary
-fn cbindgen() {
+fn cbindgen(crate_dir: &Path) {
 
 	cbindgen::generate(crate_dir)
 		.expect("Unable to generate bindings")
@@ -15,21 +15,18 @@ fn cbindgen() {
 }
 
 /// Generate bindings from C that rust can use to call into the C binary
-fn bch_bindgen() {
+fn bch_bindgen(crate_dir: &Path) {
 	// use std::process::Command;
 
 	let out_dir: PathBuf = std::env::var_os("OUT_DIR").expect("ENV Var 'OUT_DIR' Expected").into();
-	let top_dir: PathBuf = std::env::var_os("CARGO_MANIFEST_DIR")
-		.expect("ENV Var 'CARGO_MANIFEST_DIR' Expected")
-		.into();
 
 	let libbcachefs_inc_dir =
-		std::env::var("LIBBCACHEFS_INCLUDE").unwrap_or_else(|_| top_dir.join("libbcachefs").display().to_string());
+		std::env::var("LIBBCACHEFS_INCLUDE").unwrap_or_else(|_| crate_dir.join("libbcachefs").display().to_string());
 	let libbcachefs_inc_dir = std::path::Path::new(&libbcachefs_inc_dir);
 
-	let _libbcachefs_dir = top_dir.join("libbcachefs").join("libbcachefs");
-	libbcachefs_bindings(&out_dir, &top_dir, &libbcachefs_inc_dir);
-	libkeyutils_bindings(&out_dir, &top_dir);
+	let _libbcachefs_dir = crate_dir.join("libbcachefs").join("libbcachefs");
+	libbcachefs_bindings(&out_dir, &crate_dir, &libbcachefs_inc_dir);
+	libkeyutils_bindings(&out_dir, &crate_dir);
 }
 
 /// Generate bindings for libbcachefs
