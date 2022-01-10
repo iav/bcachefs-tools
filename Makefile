@@ -123,7 +123,7 @@ debug: CARGO_PROFILE=
 debug: bcachefs
 
 
-librbcachefs.a: BINDGEN_EXTRA_CLANG_ARGS+=" $(CFLAGS)"
+librbcachefs.a: export BINDGEN_EXTRA_CLANG_ARGS+= $(CFLAGS)
 librbcachefs.a: $(RUST_SRCS)
 	$(CARGO_BUILD) --manifest-path rust-src/rbcachefs/Cargo.toml
 	$(LN) -f rust-src/rbcachefs/target/$(CARGO_PROFILE_DIR)/librbcachefs.a $@
