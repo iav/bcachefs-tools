@@ -86,7 +86,7 @@ jobs:
       run: |
           BUILDER=builder
           cat << 'ENDDOCKERFILE' > Dockerfile
-          ARG IMG=ubuntu:21.10
+          ARG IMG=ubuntu:22.04
           FROM $IMG as deb
 
           ENV DEBIAN_FRONTEND=noninteractive
