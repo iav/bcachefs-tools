@@ -1043,8 +1043,7 @@ do_write:
 	*_dst = dst;
 	return more;
 csum_err:
-	bch_err(c, "error verifying existing checksum while "
-		"rewriting existing data (memory corruption?)");
+	bch_err(c, "error verifying existing checksum while rewriting existing data (memory corruption?)");
 	ret = -EIO;
 err:
 	if (to_wbio(dst)->bounce)
@@ -1084,12 +1083,6 @@ again:
 					ARRAY_SIZE(op->inline_keys),
 					BKEY_EXTENT_U64s_MAX))
 			goto flush_io;
-
-		if ((op->flags & BCH_WRITE_FROM_INTERNAL) &&
-		    percpu_ref_is_dying(&c->writes)) {
-			ret = -EROFS;
-			goto err;
-		}
 
 		/*
 		 * The copygc thread is now global, which means it's no longer
@@ -1284,7 +1277,7 @@ void bch2_write(struct closure *cl)
 	}
 
 	if (c->opts.nochanges ||
-	    !percpu_ref_tryget(&c->writes)) {
+	    !percpu_ref_tryget_live(&c->writes)) {
 		op->error = -EROFS;
 		goto err;
 	}
@@ -1325,7 +1318,7 @@ struct promote_op {
 	struct rhash_head	hash;
 	struct bpos		pos;
 
-	struct migrate_write	write;
+	struct data_update	write;
 	struct bio_vec		bi_inline_vecs[0]; /* must be last */
 };
 
@@ -1381,13 +1374,12 @@ static void promote_done(struct closure *cl)
 	bch2_time_stats_update(&c->times[BCH_TIME_data_promote],
 			       op->start_time);
 
-	bch2_bio_free_pages_pool(c, &op->write.op.wbio.bio);
+	bch2_data_update_exit(&op->write);
 	promote_free(c, op);
 }
 
 static void promote_start(struct promote_op *op, struct bch_read_bio *rbio)
 {
-	struct bch_fs *c = rbio->c;
 	struct closure *cl = &op->cl;
 	struct bio *bio = &op->write.op.wbio.bio;
 
@@ -1401,10 +1393,8 @@ static void promote_start(struct promote_op *op, struct bch_read_bio *rbio)
 	       sizeof(struct bio_vec) * rbio->bio.bi_vcnt);
 	swap(bio->bi_vcnt, rbio->bio.bi_vcnt);
 
-	bch2_migrate_read_done(&op->write, rbio);
-
 	closure_init(cl, NULL);
-	closure_call(&op->write.op.cl, bch2_write, c->btree_update_wq, cl);
+	bch2_data_update_read_done(&op->write, rbio->pick.crc, cl);
 	closure_return_with_destructor(cl, promote_done);
 }
 
@@ -1422,7 +1412,7 @@ static struct promote_op *__promote_alloc(struct bch_fs *c,
 	unsigned pages = DIV_ROUND_UP(sectors, PAGE_SECTORS);
 	int ret;
 
-	if (!percpu_ref_tryget(&c->writes))
+	if (!percpu_ref_tryget_live(&c->writes))
 		return NULL;
 
 	op = kzalloc(sizeof(*op) + sizeof(struct bio_vec) * pages, GFP_NOIO);
@@ -1460,13 +1450,13 @@ static struct promote_op *__promote_alloc(struct bch_fs *c,
 	bio = &op->write.op.wbio.bio;
 	bio_init(bio, NULL, bio->bi_inline_vecs, pages, 0);
 
-	ret = bch2_migrate_write_init(c, &op->write,
+	ret = bch2_data_update_init(c, &op->write,
 			writepoint_hashed((unsigned long) current),
 			opts,
-			DATA_PROMOTE,
-			(struct data_opts) {
+			(struct data_update_opts) {
 				.target		= opts.promote_target,
-				.nr_replicas	= 1,
+				.extra_replicas	= 1,
+				.write_flags	= BCH_WRITE_ALLOC_NOWAIT|BCH_WRITE_CACHED,
 			},
 			btree_id, k);
 	BUG_ON(ret);
@@ -1870,9 +1860,9 @@ csum_err:
 	}
 
 	bch2_dev_inum_io_error(ca, rbio->read_pos.inode, (u64) rbio->bvec_iter.bi_sector,
-		"data checksum error: expected %0llx:%0llx got %0llx:%0llx (type %u)",
+		"data checksum error: expected %0llx:%0llx got %0llx:%0llx (type %s)",
 		rbio->pick.crc.csum.hi, rbio->pick.crc.csum.lo,
-		csum.hi, csum.lo, crc.csum_type);
+		csum.hi, csum.lo, bch2_csum_types[crc.csum_type]);
 	bch2_rbio_error(rbio, READ_RETRY_AVOID, BLK_STS_IOERR);
 	goto out;
 decompression_err:

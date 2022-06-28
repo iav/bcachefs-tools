@@ -155,6 +155,7 @@ do {									\
 
 write_attribute(trigger_gc);
 write_attribute(trigger_discards);
+write_attribute(trigger_invalidates);
 write_attribute(prune_cache);
 rw_attribute(btree_gc_periodic);
 rw_attribute(gc_gens_pos);
@@ -181,7 +182,6 @@ read_attribute(journal_debug);
 read_attribute(btree_updates);
 read_attribute(btree_cache);
 read_attribute(btree_key_cache);
-read_attribute(btree_transactions);
 read_attribute(stripes_heap);
 read_attribute(open_buckets);
 
@@ -419,9 +419,6 @@ SHOW(bch2_fs)
 	if (attr == &sysfs_btree_key_cache)
 		bch2_btree_key_cache_to_text(out, &c->btree_key_cache);
 
-	if (attr == &sysfs_btree_transactions)
-		bch2_btree_trans_to_text(out, c);
-
 	if (attr == &sysfs_stripes_heap)
 		bch2_stripes_heap_to_text(out, c);
 
@@ -512,6 +509,9 @@ STORE(bch2_fs)
 
 	if (attr == &sysfs_trigger_discards)
 		bch2_do_discards(c);
+
+	if (attr == &sysfs_trigger_invalidates)
+		bch2_do_invalidates(c);
 
 #ifdef CONFIG_BCACHEFS_TESTS
 	if (attr == &sysfs_perf_test) {
@@ -613,7 +613,6 @@ struct attribute *bch2_fs_internal_files[] = {
 	&sysfs_btree_updates,
 	&sysfs_btree_cache,
 	&sysfs_btree_key_cache,
-	&sysfs_btree_transactions,
 	&sysfs_new_stripes,
 	&sysfs_stripes_heap,
 	&sysfs_open_buckets,
@@ -622,6 +621,7 @@ struct attribute *bch2_fs_internal_files[] = {
 
 	&sysfs_trigger_gc,
 	&sysfs_trigger_discards,
+	&sysfs_trigger_invalidates,
 	&sysfs_prune_cache,
 
 	&sysfs_read_realloc_races,
@@ -671,7 +671,7 @@ STORE(bch2_fs_opts_dir)
 	 * We don't need to take c->writes for correctness, but it eliminates an
 	 * unsightly error message in the dmesg log when we're RO:
 	 */
-	if (unlikely(!percpu_ref_tryget(&c->writes)))
+	if (unlikely(!percpu_ref_tryget_live(&c->writes)))
 		return -EROFS;
 
 	tmp = kstrdup(buf, GFP_KERNEL);
@@ -787,6 +787,7 @@ static void dev_alloc_debug_to_text(struct printbuf *out, struct bch_dev *ca)
 	       "open_buckets_wait\t%s\n"
 	       "open_buckets_btree\t%u\n"
 	       "open_buckets_user\t%u\n"
+	       "buckets_to_invalidate\t%llu\n"
 	       "btree reserve cache\t%u\n",
 	       stats.buckets_ec,
 	       c->freelist_wait.list.first		? "waiting" : "empty",
@@ -796,6 +797,7 @@ static void dev_alloc_debug_to_text(struct printbuf *out, struct bch_dev *ca)
 	       c->open_buckets_wait.list.first		? "waiting" : "empty",
 	       nr[BCH_DATA_btree],
 	       nr[BCH_DATA_user],
+	       should_invalidate_buckets(ca, stats),
 	       c->btree_reserve_cache_nr);
 }
 

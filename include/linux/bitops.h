@@ -137,6 +137,11 @@ static inline unsigned long hweight64(u64 w)
 	       __builtin_popcount(w >> 32);
 }
 
+static inline unsigned long hweight32(u32 w)
+{
+	return __builtin_popcount(w);
+}
+
 static inline unsigned long hweight8(unsigned long w)
 {
 	return __builtin_popcountl(w);

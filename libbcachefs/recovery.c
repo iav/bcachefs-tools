@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: GPL-2.0
 
 #include "bcachefs.h"
+#include "backpointers.h"
 #include "bkey_buf.h"
 #include "alloc_background.h"
 #include "btree_gc.h"
@@ -918,6 +919,19 @@ fsck_err:
 	return ERR_PTR(ret);
 }
 
+static bool btree_id_is_alloc(enum btree_id id)
+{
+	switch (id) {
+	case BTREE_ID_alloc:
+	case BTREE_ID_backpointers:
+	case BTREE_ID_need_discard:
+	case BTREE_ID_freespace:
+		return true;
+	default:
+		return false;
+	}
+}
+
 static int read_btree_roots(struct bch_fs *c)
 {
 	unsigned i;
@@ -929,14 +943,14 @@ static int read_btree_roots(struct bch_fs *c)
 		if (!r->alive)
 			continue;
 
-		if (i == BTREE_ID_alloc &&
+		if (btree_id_is_alloc(i) &&
 		    c->opts.reconstruct_alloc) {
 			c->sb.compat &= ~(1ULL << BCH_COMPAT_alloc_info);
 			continue;
 		}
 
 		if (r->error) {
-			__fsck_err(c, i == BTREE_ID_alloc
+			__fsck_err(c, btree_id_is_alloc(i)
 				   ? FSCK_CAN_IGNORE : 0,
 				   "invalid btree root %s",
 				   bch2_btree_ids[i]);
@@ -946,7 +960,8 @@ static int read_btree_roots(struct bch_fs *c)
 
 		ret = bch2_btree_root_read(c, i, &r->key, r->level);
 		if (ret) {
-			__fsck_err(c, i == BTREE_ID_alloc
+			__fsck_err(c,
+				   btree_id_is_alloc(i)
 				   ? FSCK_CAN_IGNORE : 0,
 				   "error reading btree root %s",
 				   bch2_btree_ids[i]);
@@ -1075,8 +1090,8 @@ int bch2_fs_recovery(struct bch_fs *c)
 	}
 
 	if (!c->opts.nochanges) {
-		if (c->sb.version < bcachefs_metadata_version_new_data_types) {
-			bch_info(c, "version prior to new_data_types, upgrade and fsck required");
+		if (c->sb.version < bcachefs_metadata_version_backpointers) {
+			bch_info(c, "version prior to backpointers, upgrade and fsck required");
 			c->opts.version_upgrade	= true;
 			c->opts.fsck		= true;
 			c->opts.fix_errors	= FSCK_OPT_YES;
@@ -1254,6 +1269,28 @@ use_clean:
 		bch_verbose(c, "done checking lrus");
 		set_bit(BCH_FS_CHECK_LRUS_DONE, &c->flags);
 
+		bch_info(c, "checking backpointers to alloc keys");
+		err = "error checking backpointers to alloc keys";
+		ret = bch2_check_btree_backpointers(c);
+		if (ret)
+			goto err;
+		bch_verbose(c, "done checking backpointers to alloc keys");
+
+		bch_info(c, "checking backpointers to extents");
+		err = "error checking backpointers to extents";
+		ret = bch2_check_backpointers_to_extents(c);
+		if (ret)
+			goto err;
+		bch_verbose(c, "done checking backpointers to extents");
+
+		bch_info(c, "checking extents to backpointers");
+		err = "error checking extents to backpointers";
+		ret = bch2_check_extents_to_backpointers(c);
+		if (ret)
+			goto err;
+		bch_verbose(c, "done checking extents to backpointers");
+		set_bit(BCH_FS_CHECK_BACKPOINTERS_DONE, &c->flags);
+
 		bch_info(c, "checking alloc to lru refs");
 		err = "error checking alloc to lru refs";
 		ret = bch2_check_alloc_to_lru_refs(c);
@@ -1265,6 +1302,7 @@ use_clean:
 		set_bit(BCH_FS_MAY_GO_RW, &c->flags);
 		set_bit(BCH_FS_INITIAL_GC_DONE, &c->flags);
 		set_bit(BCH_FS_CHECK_LRUS_DONE, &c->flags);
+		set_bit(BCH_FS_CHECK_BACKPOINTERS_DONE, &c->flags);
 		set_bit(BCH_FS_CHECK_ALLOC_TO_LRU_REFS_DONE, &c->flags);
 		set_bit(BCH_FS_FSCK_DONE, &c->flags);
 
@@ -1416,6 +1454,9 @@ int bch2_fs_initialize(struct bch_fs *c)
 	mutex_lock(&c->sb_lock);
 	c->disk_sb.sb->compat[0] |= cpu_to_le64(1ULL << BCH_COMPAT_extents_above_btree_updates_done);
 	c->disk_sb.sb->compat[0] |= cpu_to_le64(1ULL << BCH_COMPAT_bformat_overflow_done);
+
+	if (c->sb.version < bcachefs_metadata_version_backpointers)
+		c->opts.version_upgrade	= true;
 
 	if (c->opts.version_upgrade) {
 		c->disk_sb.sb->version = cpu_to_le16(bcachefs_metadata_version_current);

@@ -385,6 +385,7 @@ static int __bch2_fs_read_write(struct bch_fs *c, bool early)
 	bch2_recalc_capacity(c);
 
 	bch2_do_discards(c);
+	bch2_do_invalidates(c);
 
 	if (!early) {
 		ret = bch2_fs_read_write_late(c);
@@ -1431,6 +1432,8 @@ static int bch2_dev_remove_alloc(struct bch_fs *c, struct bch_dev *ca)
 		bch2_btree_delete_range(c, BTREE_ID_need_discard, start, end,
 					BTREE_TRIGGER_NORUN, NULL) ?:
 		bch2_btree_delete_range(c, BTREE_ID_freespace, start, end,
+					BTREE_TRIGGER_NORUN, NULL) ?:
+		bch2_btree_delete_range(c, BTREE_ID_backpointers, start, end,
 					BTREE_TRIGGER_NORUN, NULL) ?:
 		bch2_btree_delete_range(c, BTREE_ID_alloc, start, end,
 					BTREE_TRIGGER_NORUN, NULL);

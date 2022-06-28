@@ -509,6 +509,7 @@ enum {
 	BCH_FS_TOPOLOGY_REPAIR_DONE,
 	BCH_FS_INITIAL_GC_DONE,		/* kill when we enumerate fsck passes */
 	BCH_FS_CHECK_LRUS_DONE,
+	BCH_FS_CHECK_BACKPOINTERS_DONE,
 	BCH_FS_CHECK_ALLOC_TO_LRU_REFS_DONE,
 	BCH_FS_FSCK_DONE,
 	BCH_FS_INITIAL_GC_UNFIXED,	/* kill when we enumerate fsck errors */
@@ -825,6 +826,8 @@ struct bch_fs {
 	copygc_heap		copygc_heap;
 	struct write_point	copygc_write_point;
 	s64			copygc_wait;
+	bool			copygc_running;
+	wait_queue_head_t	copygc_running_wq;
 
 	/* DATA PROGRESS STATS */
 	struct list_head	data_progress_list;

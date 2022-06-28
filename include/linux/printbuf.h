@@ -225,6 +225,8 @@ static inline void printbuf_reset(struct printbuf *buf)
 {
 	buf->pos		= 0;
 	buf->allocation_failure	= 0;
+	buf->indent		= 0;
+	buf->tabstop		= 0;
 }
 
 /**

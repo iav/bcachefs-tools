@@ -43,6 +43,8 @@
 	(time_after_eq64(a, b) && \
 	 time_before_eq64(a, c))
 
+#define time_is_before_jiffies(a) time_after(jiffies, a)
+
 #define HZ		1000
 
 static inline u64 jiffies_to_nsecs(const unsigned long j)

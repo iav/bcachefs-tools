@@ -40,6 +40,7 @@ struct block_device {
 	struct gendisk		__bd_disk;
 	int			bd_fd;
 	int			bd_sync_fd;
+	int			bd_buffered_fd;
 };
 
 #define bdev_kobj(_bdev) (&((_bdev)->kobj))

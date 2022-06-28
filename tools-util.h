@@ -95,7 +95,7 @@ static inline struct range hole_iter_next(struct hole_iter *iter)
 {
 	struct range r = {
 		.start	= iter->idx ? iter->r.data[iter->idx - 1].end : 0,
-		.end	= iter->idx < iter->r.size
+		.end	= iter->idx < iter->r.nr
 			? iter->r.data[iter->idx].start : iter->end,
 	};
 
@@ -107,7 +107,7 @@ static inline struct range hole_iter_next(struct hole_iter *iter)
 
 #define for_each_hole(_iter, _ranges, _end, _i)				\
 	for (_iter = (struct hole_iter) { .r = _ranges, .end = _end };	\
-	     (_iter.idx <= _iter.r.size &&				\
+	     (_iter.idx <= _iter.r.nr &&				\
 	      (_i = hole_iter_next(&_iter), true));)
 
 #include <linux/fiemap.h>

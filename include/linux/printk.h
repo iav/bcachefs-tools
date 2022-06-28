@@ -5,6 +5,7 @@
 #define pr_fmt(fmt) fmt
 #endif
 
+#include <linux/compiler.h>
 #include <stdarg.h>
 #include <stdio.h>
 
@@ -169,7 +170,6 @@ static inline int scnprintf(char * buf, size_t size, const char * fmt, ...)
  * ratelimited messages with local ratelimit_state,
  * no local ratelimit_state used in the !PRINTK case
  */
-#ifdef CONFIG_PRINTK
 #define printk_ratelimited(fmt, ...)					\
 ({									\
 	static DEFINE_RATELIMIT_STATE(_rs,				\
@@ -179,10 +179,6 @@ static inline int scnprintf(char * buf, size_t size, const char * fmt, ...)
 	if (__ratelimit(&_rs))						\
 		printk(fmt, ##__VA_ARGS__);				\
 })
-#else
-#define printk_ratelimited(fmt, ...)					\
-	no_printk(fmt, ##__VA_ARGS__)
-#endif
 
 #define pr_emerg_ratelimited(fmt, ...)					\
 	printk_ratelimited(KERN_EMERG pr_fmt(fmt), ##__VA_ARGS__)

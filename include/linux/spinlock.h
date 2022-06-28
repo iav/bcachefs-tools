@@ -15,6 +15,11 @@ static inline void raw_spin_lock_init(raw_spinlock_t *lock)
 	pthread_mutex_init(&lock->lock, NULL);
 }
 
+static inline bool raw_spin_trylock(raw_spinlock_t *lock)
+{
+	return !pthread_mutex_trylock(&lock->lock);
+}
+
 static inline void raw_spin_lock(raw_spinlock_t *lock)
 {
 	pthread_mutex_lock(&lock->lock);

@@ -128,12 +128,10 @@ unsigned bdev_logical_block_size(struct block_device *bdev)
 	BUG_ON(ret);
 
 	if (!S_ISBLK(statbuf.st_mode))
-		return statbuf.st_blksize >> 9;
+		return statbuf.st_blksize;
 
-	ret = ioctl(bdev->bd_fd, BLKPBSZGET, &blksize);
-	BUG_ON(ret);
-
-	return blksize >> 9;
+	xioctl(bdev->bd_fd, BLKPBSZGET, &blksize);
+	return blksize;
 }
 
 sector_t get_capacity(struct gendisk *disk)
@@ -168,7 +166,7 @@ struct block_device *blkdev_get_by_path(const char *path, fmode_t mode,
 					void *holder)
 {
 	struct block_device *bdev;
-	int fd, sync_fd, flags = O_DIRECT;
+	int fd, sync_fd, buffered_fd, flags = 0;
 
 	if ((mode & (FMODE_READ|FMODE_WRITE)) == (FMODE_READ|FMODE_WRITE))
 		flags = O_RDWR;
@@ -183,16 +181,12 @@ struct block_device *blkdev_get_by_path(const char *path, fmode_t mode,
 		flags |= O_EXCL;
 #endif
 
-	fd = open(path, flags);
+	fd = open(path, flags|O_DIRECT);
 	if (fd < 0)
 		return ERR_PTR(-errno);
 
-	sync_fd = open(path, flags|O_SYNC);
-	if (sync_fd < 0) {
-		assert(0);
-		close(fd);
-		return ERR_PTR(-errno);
-	}
+	sync_fd	= xopen(path, flags|O_DIRECT|O_SYNC);
+	buffered_fd = xopen(path, flags);
 
 	bdev = malloc(sizeof(*bdev));
 	memset(bdev, 0, sizeof(*bdev));
@@ -203,6 +197,7 @@ struct block_device *blkdev_get_by_path(const char *path, fmode_t mode,
 	bdev->bd_dev		= xfstat(fd).st_rdev;
 	bdev->bd_fd		= fd;
 	bdev->bd_sync_fd	= sync_fd;
+	bdev->bd_buffered_fd	= buffered_fd;
 	bdev->bd_holder		= holder;
 	bdev->bd_disk		= &bdev->__bd_disk;
 	bdev->bd_disk->bdi	= &bdev->bd_disk->__bdi;
