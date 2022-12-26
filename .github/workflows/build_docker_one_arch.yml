@@ -18,7 +18,7 @@ jobs:
       uses: docker/setup-qemu-action@v2
     - name: Docker Setup Buildx
       id:   buildx
-      uses: docker/setup-buildx-action@v1.6.0
+      uses: docker/setup-buildx-action@v2
     -
         name: Inspect builder
         run: |
@@ -28,7 +28,7 @@ jobs:
           echo "Flags:     ${{ steps.buildx.outputs.flags }}"
           echo "Platforms: ${{ steps.buildx.outputs.platforms }}"
 
-    - uses: actions/checkout@v2
+    - uses: actions/checkout@v3
     - name: build image
       run: |
           BUILDER=builder
