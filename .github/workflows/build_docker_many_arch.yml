@@ -71,8 +71,8 @@ jobs:
           echo "SHORTIMAGENAME=$SHORTIMAGENAME" >> $GITHUB_ENV
           echo VERSION=$VERSION
 
-          echo "::set-output name=IMAGE_ID::$IMAGE_ID"
-          echo "::set-output name=SHORTIMAGENAME::$SHORTIMAGENAME"
+          echo "IMAGE_ID=${IMAGE_ID}" >> $GITHUB_OUTPUT
+          echo "SHORTIMAGENAME=${SHORTIMAGENAME}"  >> $GITHUB_OUTPUT
           #echo "::set-output name=VERSION::$VERSION"
     - name: run build in container ${{ matrix.platform }}
       run: |
