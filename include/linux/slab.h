@@ -20,12 +20,10 @@
 
 static inline void *kmalloc(size_t size, gfp_t flags)
 {
-	unsigned i = 0;
+	unsigned i;
 	void *p;
 
-	do {
-		run_shrinkers(flags, i != 0);
-
+	for (i = 0; i < 10; i++) {
 		if (size) {
 			size_t alignment = min(rounddown_pow_of_two(size), (size_t)PAGE_SIZE);
 			alignment = max(sizeof(void *), alignment);
@@ -34,9 +32,15 @@ static inline void *kmalloc(size_t size, gfp_t flags)
 		} else {
 			p = malloc(0);
 		}
-		if (p && (flags & __GFP_ZERO))
-			memset(p, 0, size);
-	} while (!p && i++ < 10);
+
+		if (p) {
+			if (flags & __GFP_ZERO)
+				memset(p, 0, size);
+			break;
+		}
+
+		run_shrinkers(flags, true);
+	}
 
 	return p;
 }
@@ -93,16 +97,20 @@ static inline void *krealloc_array(void *p, size_t new_n, size_t new_size, gfp_t
 static inline struct page *alloc_pages(gfp_t flags, unsigned int order)
 {
 	size_t size = PAGE_SIZE << order;
-	unsigned i = 0;
+	unsigned i;
 	void *p;
 
-	do {
-		run_shrinkers(flags, i != 0);
-
+	for (i = 0; i < 10; i++) {
 		p = aligned_alloc(PAGE_SIZE, size);
-		if (p && (flags & __GFP_ZERO))
-			memset(p, 0, size);
-	} while (!p && i++ < 10);
+
+		if (p) {
+			if (flags & __GFP_ZERO)
+				memset(p, 0, size);
+			break;
+		}
+
+		run_shrinkers(flags, true);
+	}
 
 	return p;
 }
@@ -193,20 +201,24 @@ static inline struct kmem_cache *kmem_cache_create(size_t obj_size)
 
 #define vfree(p)		free(p)
 
-static inline void *__vmalloc(unsigned long size, gfp_t gfp_mask)
+static inline void *__vmalloc(unsigned long size, gfp_t flags)
 {
-	unsigned i = 0;
+	unsigned i;
 	void *p;
 
 	size = round_up(size, PAGE_SIZE);
 
-	do {
-		run_shrinkers(gfp_mask, i != 0);
-
+	for (i = 0; i < 10; i++) {
 		p = aligned_alloc(PAGE_SIZE, size);
-		if (p && gfp_mask & __GFP_ZERO)
-			memset(p, 0, size);
-	} while (!p && i++ < 10);
+
+		if (p) {
+			if (flags & __GFP_ZERO)
+				memset(p, 0, size);
+			break;
+		}
+
+		run_shrinkers(flags, true);
+	}
 
 	return p;
 }

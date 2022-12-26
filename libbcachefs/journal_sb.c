@@ -22,7 +22,7 @@ static int bch2_sb_journal_validate(struct bch_sb *sb,
 {
 	struct bch_sb_field_journal *journal = field_to_type(f, journal);
 	struct bch_member *m = bch2_sb_get_members(sb)->members + sb->dev_idx;
-	int ret = -EINVAL;
+	int ret = -BCH_ERR_invalid_sb_journal;
 	unsigned nr;
 	unsigned i;
 	u64 *b;
@@ -31,7 +31,7 @@ static int bch2_sb_journal_validate(struct bch_sb *sb,
 	if (!nr)
 		return 0;
 
-	b = kmalloc_array(sizeof(u64), nr, GFP_KERNEL);
+	b = kmalloc_array(nr, sizeof(u64), GFP_KERNEL);
 	if (!b)
 		return -ENOMEM;
 
@@ -105,7 +105,7 @@ static int bch2_sb_journal_v2_validate(struct bch_sb *sb,
 {
 	struct bch_sb_field_journal_v2 *journal = field_to_type(f, journal_v2);
 	struct bch_member *m = bch2_sb_get_members(sb)->members + sb->dev_idx;
-	int ret = -EINVAL;
+	int ret = -BCH_ERR_invalid_sb_journal;
 	unsigned nr;
 	unsigned i;
 	struct u64_range *b;
@@ -114,7 +114,7 @@ static int bch2_sb_journal_v2_validate(struct bch_sb *sb,
 	if (!nr)
 		return 0;
 
-	b = kmalloc_array(sizeof(*b), nr, GFP_KERNEL);
+	b = kmalloc_array(nr, sizeof(*b), GFP_KERNEL);
 	if (!b)
 		return -ENOMEM;
 
@@ -197,7 +197,7 @@ int bch2_journal_buckets_to_sb(struct bch_fs *c, struct bch_dev *ca)
 	j = bch2_sb_resize_journal_v2(&ca->disk_sb,
 				 (sizeof(*j) + sizeof(j->d[0]) * nr) / sizeof(u64));
 	if (!j)
-		return -ENOSPC;
+		return -BCH_ERR_ENOSPC_sb_journal;
 
 	bch2_sb_field_delete(&ca->disk_sb, BCH_SB_FIELD_journal);
 

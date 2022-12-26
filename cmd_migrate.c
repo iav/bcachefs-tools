@@ -30,6 +30,7 @@
 #include "libbcachefs/btree_update.h"
 #include "libbcachefs/buckets.h"
 #include "libbcachefs/dirent.h"
+#include "libbcachefs/errcode.h"
 #include "libbcachefs/fs-common.h"
 #include "libbcachefs/inode.h"
 #include "libbcachefs/io.h"
@@ -122,12 +123,12 @@ static void update_inode(struct bch_fs *c,
 	struct bkey_inode_buf packed;
 	int ret;
 
-	bch2_inode_pack(c, &packed, inode);
+	bch2_inode_pack(&packed, inode);
 	packed.inode.k.p.snapshot = U32_MAX;
 	ret = bch2_btree_insert(c, BTREE_ID_inodes, &packed.inode.k_i,
 				NULL, NULL, 0);
 	if (ret)
-		die("error updating inode: %s", strerror(-ret));
+		die("error updating inode: %s", bch2_err_str(ret));
 }
 
 static void create_link(struct bch_fs *c,
@@ -143,7 +144,7 @@ static void create_link(struct bch_fs *c,
 				(subvol_inum) { 1, parent->bi_inum }, &parent_u,
 				(subvol_inum) { 1, inum }, &inode, &qstr));
 	if (ret)
-		die("error creating hardlink: %s", strerror(-ret));
+		die("error creating hardlink: %s", bch2_err_str(ret));
 }
 
 static struct bch_inode_unpacked create_file(struct bch_fs *c,
@@ -164,7 +165,7 @@ static struct bch_inode_unpacked create_file(struct bch_fs *c,
 				  uid, gid, mode, rdev, NULL, NULL,
 				  (subvol_inum) {}, 0));
 	if (ret)
-		die("error creating %s: %s", name, strerror(-ret));
+		die("error creating %s: %s", name, bch2_err_str(ret));
 
 	return new_inode;
 }
@@ -235,7 +236,7 @@ static void copy_xattrs(struct bch_fs *c, struct bch_inode_unpacked *dst,
 					       &hash_info, attr,
 					       val, val_size, h->flags, 0));
 		if (ret < 0)
-			die("error creating xattr: %s", strerror(-ret));
+			die("error creating xattr: %s", bch2_err_str(ret));
 	}
 }
 
@@ -265,14 +266,14 @@ static void write_data(struct bch_fs *c,
 	op.nr_replicas	= 1;
 	op.subvol	= 1;
 	op.pos		= SPOS(dst_inode->bi_inum, dst_offset >> 9, U32_MAX);
+	op.flags |= BCH_WRITE_SYNC;
 
 	int ret = bch2_disk_reservation_get(c, &op.res, len >> 9,
 					    c->opts.data_replicas, 0);
 	if (ret)
-		die("error reserving space in new filesystem: %s", strerror(-ret));
+		die("error reserving space in new filesystem: %s", bch2_err_str(ret));
 
 	closure_call(&op.cl, bch2_write, NULL, &cl);
-	closure_sync(&cl);
 
 	dst_inode->bi_sectors += len >> 9;
 }
@@ -335,12 +336,12 @@ static void link_data(struct bch_fs *c, struct bch_inode_unpacked *dst,
 						BCH_DISK_RESERVATION_NOFAIL);
 		if (ret)
 			die("error reserving space in new filesystem: %s",
-			    strerror(-ret));
+			    bch2_err_str(ret));
 
 		ret = bch2_btree_insert(c, BTREE_ID_extents, &e->k_i,
 					&res, NULL, 0);
 		if (ret)
-			die("btree insert error %s", strerror(-ret));
+			die("btree insert error %s", bch2_err_str(ret));
 
 		bch2_disk_reservation_put(c, &res);
 
@@ -581,7 +582,7 @@ static void copy_fs(struct bch_fs *c, int src_fd, const char *src_path,
 	int ret = bch2_inode_find_by_inum(c, (subvol_inum) { 1, BCACHEFS_ROOT_INO },
 					  &root_inode);
 	if (ret)
-		die("error looking up root directory: %s", strerror(-ret));
+		die("error looking up root directory: %s", bch2_err_str(ret));
 
 	if (fchdir(src_fd))
 		die("chdir error: %m");
@@ -706,13 +707,13 @@ static int migrate_fs(const char		*fs_path,
 
 	c = bch2_fs_open(path, 1, opts);
 	if (IS_ERR(c))
-		die("Error opening new filesystem: %s", strerror(-PTR_ERR(c)));
+		die("Error opening new filesystem: %s", bch2_err_str(PTR_ERR(c)));
 
 	mark_unreserved_space(c, extents);
 
 	int ret = bch2_fs_start(c);
 	if (ret)
-		die("Error starting new filesystem: %s", strerror(-ret));
+		die("Error starting new filesystem: %s", bch2_err_str(ret));
 
 	copy_fs(c, fs_fd, fs_path, bcachefs_inum, &extents);
 
@@ -724,7 +725,7 @@ static int migrate_fs(const char		*fs_path,
 
 	c = bch2_fs_open(path, 1, opts);
 	if (IS_ERR(c))
-		die("Error opening new filesystem: %s", strerror(-PTR_ERR(c)));
+		die("Error opening new filesystem: %s", bch2_err_str(PTR_ERR(c)));
 
 	bch2_fs_stop(c);
 	printf("fsck complete\n");

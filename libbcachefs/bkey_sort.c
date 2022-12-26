@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: GPL-2.0
 #include "bcachefs.h"
 #include "bkey_buf.h"
+#include "bkey_cmp.h"
 #include "bkey_sort.h"
 #include "bset.h"
 #include "extents.h"
@@ -143,6 +144,8 @@ bch2_sort_repack(struct bset *dst, struct btree *src,
 		else
 			bch2_bkey_unpack(src, (void *) out, in);
 
+		out->needs_whiteout = false;
+
 		btree_keys_account_key_add(&nr, 0, out);
 		out = bkey_next(out);
 	}
@@ -155,7 +158,7 @@ static inline int sort_keys_cmp(struct btree *b,
 				struct bkey_packed *l,
 				struct bkey_packed *r)
 {
-	return bch2_bkey_cmp_packed(b, l, r) ?:
+	return bch2_bkey_cmp_packed_inlined(b, l, r) ?:
 		(int) bkey_deleted(r) - (int) bkey_deleted(l) ?:
 		(int) l->needs_whiteout - (int) r->needs_whiteout;
 }
@@ -177,7 +180,7 @@ unsigned bch2_sort_keys(struct bkey_packed *dst,
 			continue;
 
 		while ((next = sort_iter_peek(iter)) &&
-		       !bch2_bkey_cmp_packed(iter->b, in, next)) {
+		       !bch2_bkey_cmp_packed_inlined(iter->b, in, next)) {
 			BUG_ON(in->needs_whiteout &&
 			       next->needs_whiteout);
 			needs_whiteout |= in->needs_whiteout;

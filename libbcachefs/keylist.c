@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: GPL-2.0
 
 #include "bcachefs.h"
+#include "bkey.h"
 #include "keylist.h"
 
 int bch2_keylist_realloc(struct keylist *l, u64 *inline_u64s,
@@ -35,7 +36,7 @@ void bch2_keylist_add_in_order(struct keylist *l, struct bkey_i *insert)
 	struct bkey_i *where;
 
 	for_each_keylist_key(l, where)
-		if (bkey_cmp(insert->k.p, where->k.p) < 0)
+		if (bpos_lt(insert->k.p, where->k.p))
 			break;
 
 	memmove_u64s_up((u64 *) where + insert->k.u64s,
@@ -62,6 +63,6 @@ void bch2_verify_keylist_sorted(struct keylist *l)
 
 	for_each_keylist_key(l, k)
 		BUG_ON(bkey_next(k) != l->top &&
-		       bpos_cmp(k->k.p, bkey_next(k)->k.p) >= 0);
+		       bpos_ge(k->k.p, bkey_next(k)->k.p));
 }
 #endif

@@ -18,7 +18,7 @@ extern const char * const bch2_bkey_types[];
  *
  * When invalid, error string is returned via @err. @rw indicates whether key is
  * being read or written; more aggressive checks can be enabled when rw == WRITE.
-*/
+ */
 struct bkey_ops {
 	int		(*key_invalid)(const struct bch_fs *c, struct bkey_s_c k,
 				       int rw, struct printbuf *err);
@@ -60,7 +60,7 @@ static inline bool bch2_bkey_maybe_mergable(const struct bkey *l, const struct b
 {
 	return l->type == r->type &&
 		!bversion_cmp(l->version, r->version) &&
-		!bpos_cmp(l->p, bkey_start_pos(r)) &&
+		bpos_eq(l->p, bkey_start_pos(r)) &&
 		(u64) l->size + r->size <= KEY_SIZE_MAX &&
 		bch2_bkey_ops[l->type].key_merge &&
 		!bch2_key_merging_disabled;

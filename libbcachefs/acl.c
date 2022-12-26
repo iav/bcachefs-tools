@@ -173,7 +173,7 @@ bch2_acl_to_xattr(struct btree_trans *trans,
 	bkey_xattr_init(&xattr->k_i);
 	xattr->k.u64s		= u64s;
 	xattr->v.x_type		= acl_to_xattr_type(type);
-	xattr->v.x_name_len	= 0,
+	xattr->v.x_name_len	= 0;
 	xattr->v.x_val_len	= cpu_to_le16(acl_len);
 
 	acl_header = xattr_val(&xattr->v);
@@ -236,7 +236,7 @@ retry:
 			&X_SEARCH(acl_to_xattr_type(type), "", 0),
 			0);
 	if (ret) {
-		if (ret == -EINTR)
+		if (bch2_err_matches(ret, BCH_ERR_transaction_restart))
 			goto retry;
 		if (ret != -ENOENT)
 			acl = ERR_PTR(ret);
@@ -335,7 +335,7 @@ retry:
 btree_err:
 	bch2_trans_iter_exit(&trans, &inode_iter);
 
-	if (ret == -EINTR)
+	if (bch2_err_matches(ret, BCH_ERR_transaction_restart))
 		goto retry;
 	if (unlikely(ret))
 		goto err;

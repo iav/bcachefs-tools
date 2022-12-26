@@ -139,8 +139,12 @@ void bch2_btree_complete_write(struct bch_fs *, struct btree *,
 
 bool bch2_btree_post_write_cleanup(struct bch_fs *, struct btree *);
 
-#define BTREE_WRITE_ONLY_IF_NEED	(1U << 0)
-#define BTREE_WRITE_ALREADY_STARTED	(1U << 1)
+enum btree_write_flags {
+	__BTREE_WRITE_ONLY_IF_NEED = BTREE_WRITE_TYPE_BITS,
+	__BTREE_WRITE_ALREADY_STARTED,
+};
+#define BTREE_WRITE_ONLY_IF_NEED	(1U << __BTREE_WRITE_ONLY_IF_NEED )
+#define BTREE_WRITE_ALREADY_STARTED	(1U << __BTREE_WRITE_ALREADY_STARTED)
 
 void __bch2_btree_node_write(struct bch_fs *, struct btree *, unsigned);
 void bch2_btree_node_write(struct bch_fs *, struct btree *,
@@ -197,7 +201,7 @@ static inline void compat_btree_node(unsigned level, enum btree_id btree_id,
 {
 	if (version < bcachefs_metadata_version_inode_btree_change &&
 	    btree_node_type_is_extents(btree_id) &&
-	    bpos_cmp(bn->min_key, POS_MIN) &&
+	    !bpos_eq(bn->min_key, POS_MIN) &&
 	    write)
 		bn->min_key = bpos_nosnap_predecessor(bn->min_key);
 
@@ -214,9 +218,11 @@ static inline void compat_btree_node(unsigned level, enum btree_id btree_id,
 
 	if (version < bcachefs_metadata_version_inode_btree_change &&
 	    btree_node_type_is_extents(btree_id) &&
-	    bpos_cmp(bn->min_key, POS_MIN) &&
+	    !bpos_eq(bn->min_key, POS_MIN) &&
 	    !write)
 		bn->min_key = bpos_nosnap_successor(bn->min_key);
 }
+
+void bch2_btree_write_stats_to_text(struct printbuf *, struct bch_fs *);
 
 #endif /* _BCACHEFS_BTREE_IO_H */

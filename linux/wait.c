@@ -66,6 +66,11 @@ void wake_up(wait_queue_head_t *q)
 	__wake_up(q, TASK_NORMAL, 1, NULL);
 }
 
+void wake_up_all(wait_queue_head_t *q)
+{
+	__wake_up(q, TASK_NORMAL, 0, NULL);
+}
+
 static void __wake_up_locked(wait_queue_head_t *q, unsigned int mode, int nr)
 {
 	__wake_up_common(q, mode, nr, 0, NULL);

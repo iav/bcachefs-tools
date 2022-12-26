@@ -1,7 +1,9 @@
 
 #include <stdio.h>
 
+#include <linux/kthread.h>
 #include <linux/list.h>
+#include <linux/mm.h>
 #include <linux/mutex.h>
 #include <linux/shrinker.h>
 
@@ -10,7 +12,7 @@
 static LIST_HEAD(shrinker_list);
 static DEFINE_MUTEX(shrinker_lock);
 
-int register_shrinker(struct shrinker *shrinker)
+int register_shrinker(struct shrinker *shrinker, const char *fmt, ...)
 {
 	mutex_lock(&shrinker_lock);
 	list_add_tail(&shrinker->list, &shrinker_list);
@@ -39,30 +41,30 @@ static u64 parse_meminfo_line(const char *line)
 	return v << 10;
 }
 
-static struct meminfo read_meminfo(void)
+void si_meminfo(struct sysinfo *val)
 {
-	struct meminfo ret = { 0 };
 	size_t len, n = 0;
 	char *line = NULL;
 	const char *v;
 	FILE *f;
 
+	memset(val, 0, sizeof(*val));
+	val->mem_unit = 1;
+
 	f = fopen("/proc/meminfo", "r");
 	if (!f)
-		return ret;
+		return;
 
 	while ((len = getline(&line, &n, f)) != -1) {
 		if ((v = strcmp_prefix(line, "MemTotal:")))
-			ret.total = parse_meminfo_line(v);
+			val->totalram = parse_meminfo_line(v);
 
 		if ((v = strcmp_prefix(line, "MemAvailable:")))
-			ret.available = parse_meminfo_line(v);
+			val->freeram = parse_meminfo_line(v);
 	}
 
 	fclose(f);
 	free(line);
-
-	return ret;
 }
 
 static void run_shrinkers_allocation_failed(gfp_t gfp_mask)
@@ -85,8 +87,11 @@ static void run_shrinkers_allocation_failed(gfp_t gfp_mask)
 void run_shrinkers(gfp_t gfp_mask, bool allocation_failed)
 {
 	struct shrinker *shrinker;
-	struct meminfo info;
+	struct sysinfo info;
 	s64 want_shrink;
+
+	if (!(gfp_mask & GFP_KERNEL))
+		return;
 
 	/* Fast out if there are no shrinkers to run. */
 	if (list_empty(&shrinker_list))
@@ -97,10 +102,10 @@ void run_shrinkers(gfp_t gfp_mask, bool allocation_failed)
 		return;
 	}
 
-	info = read_meminfo();
+	si_meminfo(&info);
 
-	if (info.total && info.available) {
-		want_shrink = (info.total >> 2) - info.available;
+	if (info.totalram && info.freeram) {
+		want_shrink = (info.totalram >> 2) - info.freeram;
 
 		if (want_shrink <= 0)
 			return;
@@ -121,4 +126,32 @@ void run_shrinkers(gfp_t gfp_mask, bool allocation_failed)
 		shrinker->scan_objects(shrinker, &sc);
 	}
 	mutex_unlock(&shrinker_lock);
+}
+
+static int shrinker_thread(void *arg)
+{
+	while (!kthread_should_stop()) {
+		sleep(1);
+		run_shrinkers(GFP_KERNEL, false);
+	}
+
+	return 0;
+}
+
+struct task_struct *shrinker_task;
+
+__attribute__((constructor(103)))
+static void shrinker_thread_init(void)
+{
+	shrinker_task = kthread_run(shrinker_thread, NULL, "shrinkers");
+	BUG_ON(IS_ERR(shrinker_task));
+}
+
+__attribute__((destructor(103)))
+static void shrinker_thread_exit(void)
+{
+	int ret = kthread_stop(shrinker_task);
+	BUG_ON(ret);
+
+	shrinker_task = NULL;
 }

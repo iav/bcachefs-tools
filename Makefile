@@ -2,7 +2,20 @@ PREFIX?=/usr/local
 PKG_CONFIG?=pkg-config
 INSTALL=install
 
-CFLAGS+=-std=gnu89 -O2 -g -MMD -Wall -fPIC				\
+ifeq ("$(origin V)", "command line")
+  BUILD_VERBOSE = $(V)
+endif
+ifndef BUILD_VERBOSE
+  BUILD_VERBOSE = 0
+endif
+
+ifeq ($(BUILD_VERBOSE),1)
+  Q =
+else
+  Q = @
+endif
+
+CFLAGS+=-std=gnu11 -O2 -g -MMD -Wall -fPIC 			\
 	-Wno-pointer-sign					\
 	-fno-strict-aliasing					\
 	-fno-delete-null-pointer-checks				\
@@ -24,7 +37,7 @@ LDFLAGS+=$(CFLAGS) $(EXTRA_LDFLAGS)
 PYTEST_ARGS?=
 PYTEST_CMD?=$(shell \
 	command -v pytest-3 \
-	|| which pytest-3 \
+	|| which pytest-3 2>/dev/null \
 )
 PYTEST:=$(PYTEST_CMD) $(PYTEST_ARGS)
 
@@ -104,7 +117,14 @@ DEPS=$(SRCS:.c=.d)
 -include $(DEPS)
 
 OBJS=$(SRCS:.c=.o)
+
+%.o: %.c
+	@echo "    [CC]     $@"
+	$(Q)$(CC) $(CPPFLAGS) $(CFLAGS) -c -o $@ $<
+
 bcachefs: $(filter-out ./tests/%.o, $(OBJS))
+	@echo "    [LD]     $@"
+	$(Q)$(CC) $(LDFLAGS) $+ $(LOADLIBES) $(LDLIBS) -o $@
 
 RUST_SRCS=$(shell find rust-src/ -type f -iname '*.rs')
 MOUNT_SRCS=$(filter %mount, $(RUST_SRCS))
@@ -115,7 +135,8 @@ debug: bcachefs
 MOUNT_OBJ=$(filter-out ./bcachefs.o ./tests/%.o ./cmd_%.o , $(OBJS))
 libbcachefs.so: LDFLAGS+=-shared
 libbcachefs.so: $(MOUNT_OBJ)
-	$(CC) $(LDFLAGS) $+ -o $@ $(LDLIBS)
+	@echo "    [CC]     $@"
+	$(Q)$(CC) $(LDFLAGS) $+ -o $@ $(LDLIBS)
 
 MOUNT_TOML=rust-src/mount/Cargo.toml
 mount.bcachefs: lib $(MOUNT_SRCS)
@@ -127,13 +148,16 @@ mount.bcachefs: lib $(MOUNT_SRCS)
 
 
 tests/test_helper: $(filter ./tests/%.o, $(OBJS))
+	@echo "    [LD]     $@"
+	$(Q)$(CC) $(LDFLAGS) $+ $(LOADLIBES) $(LDLIBS) -o $@
 
 # If the version string differs from the last build, update the last version
 ifneq ($(VERSION),$(shell cat .version 2>/dev/null))
 .PHONY: .version
 endif
 .version:
-	echo '$(VERSION)' > $@
+	@echo "  [VERS]    $@"
+	$(Q)echo '$(VERSION)' > $@
 
 # Rebuild the 'version' command any time the version string changes
 cmd_version.o : .version
@@ -158,8 +182,9 @@ endif
 
 .PHONY: clean
 clean:
-	$(RM) bcachefs mount.bcachefs libbcachefs_mount.a tests/test_helper .version $(OBJS) $(DEPS) $(DOCGENERATED)
-	$(RM) -rf rust-src/*/target
+	@echo "Cleaning all"
+	$(Q)$(RM) bcachefs mount.bcachefs libbcachefs_mount.a tests/test_helper .version *.tar.xz $(OBJS) $(DEPS) $(DOCGENERATED)
+	$(Q)$(RM) -rf rust-src/*/target
 
 .PHONY: deb
 deb: all
@@ -197,6 +222,16 @@ update-bcachefs-sources:
 	git add linux/generic-radix-tree.c
 	cp $(LINUX_DIR)/include/linux/kmemleak.h include/linux/
 	git add include/linux/kmemleak.h
+	cp $(LINUX_DIR)/include/linux/printbuf.h include/linux/
+	git add include/linux/printbuf.h
+	cp $(LINUX_DIR)/lib/printbuf.c linux/
+	git add linux/printbuf.c
+	cp $(LINUX_DIR)/lib/math/mean_and_variance.c linux/
+	git add linux/mean_and_variance.c
+	cp $(LINUX_DIR)/include/linux/mean_and_variance.h include/linux/
+	git add include/linux/mean_and_variance.h
+	cp $(LINUX_DIR)/lib/math/int_sqrt.c linux/
+	git add linux/int_sqrt.c
 	cp $(LINUX_DIR)/scripts/Makefile.compiler ./
 	git add Makefile.compiler
 	$(RM) libbcachefs/*.mod.c
@@ -207,3 +242,20 @@ update-bcachefs-sources:
 .PHONY: update-commit-bcachefs-sources
 update-commit-bcachefs-sources: update-bcachefs-sources
 	git commit -m "Update bcachefs sources to $(shell git -C $(LINUX_DIR) show --oneline --no-patch)"
+
+SRCTARXZ = bcachefs-tools-$(VERSION).tar.xz
+SRCDIR=bcachefs-tools-$(VERSION)
+
+.PHONY: tarball
+tarball: $(SRCTARXZ)
+
+$(SRCTARXZ) : .gitcensus
+	$(Q)tar --transform "s,^,$(SRCDIR)/," -Jcf $(SRCDIR).tar.xz  \
+	    `cat .gitcensus` 
+	@echo Wrote: $@
+
+.PHONY: .gitcensus
+.gitcensus:
+	$(Q)if test -d .git; then \
+	  git ls-files > .gitcensus; \
+	fi

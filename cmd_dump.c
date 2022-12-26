@@ -82,7 +82,7 @@ static void dump_one_device(struct bch_fs *c, struct bch_dev *ca, int fd,
 		}
 
 		if (ret)
-			die("error %s walking btree nodes", strerror(-ret));
+			die("error %s walking btree nodes", bch2_err_str(ret));
 
 		b = c->btree_roots[i].b;
 		if (!btree_node_fake(b)) {
@@ -147,7 +147,7 @@ int cmd_dump(int argc, char *argv[])
 
 	struct bch_fs *c = bch2_fs_open(argv, argc, opts);
 	if (IS_ERR(c))
-		die("error opening %s: %s", argv[0], strerror(-PTR_ERR(c)));
+		die("error opening %s: %s", argv[0], bch2_err_str(PTR_ERR(c)));
 
 	down_read(&c->gc_lock);
 

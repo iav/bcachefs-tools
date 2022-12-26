@@ -8,8 +8,8 @@
 struct bch_fs;
 struct btree;
 
-void bch2_btree_node_lock_for_insert(struct btree_trans *, struct btree_path *,
-				     struct btree *);
+void bch2_btree_node_prep_for_write(struct btree_trans *,
+				    struct btree_path *, struct btree *);
 bool bch2_btree_bset_insert_key(struct btree_trans *, struct btree_path *,
 				struct btree *, struct btree_node_iter *,
 				struct bkey_i *);
@@ -82,7 +82,8 @@ void bch2_trans_commit_hook(struct btree_trans *,
 			    struct btree_trans_commit_hook *);
 int __bch2_trans_commit(struct btree_trans *);
 
-int bch2_trans_log_msg(struct btree_trans *, const char *);
+int bch2_trans_log_msg(struct btree_trans *, const char *, ...);
+int bch2_fs_log_msg(struct bch_fs *, const char *, ...);
 
 /**
  * bch2_trans_commit - insert keys at given iterator positions
@@ -90,7 +91,6 @@ int bch2_trans_log_msg(struct btree_trans *, const char *);
  * This is main entry point for btree updates.
  *
  * Return values:
- * -EINTR: locking changed, this function should be called again.
  * -EROFS: filesystem read only
  * -EIO: journal or btree node IO error
  */
@@ -106,20 +106,12 @@ static inline int bch2_trans_commit(struct btree_trans *trans,
 	return __bch2_trans_commit(trans);
 }
 
-#define lockrestart_do(_trans, _do)					\
-({									\
-	int _ret;							\
-									\
-	do {								\
-		bch2_trans_begin(_trans);				\
-		_ret = (_do);						\
-	} while (_ret == -EINTR);					\
-									\
-	_ret;								\
-})
-
-#define __bch2_trans_do(_trans, _disk_res, _journal_seq, _flags, _do)	\
+#define commit_do(_trans, _disk_res, _journal_seq, _flags, _do)	\
 	lockrestart_do(_trans, _do ?: bch2_trans_commit(_trans, (_disk_res),\
+					(_journal_seq), (_flags)))
+
+#define nested_commit_do(_trans, _disk_res, _journal_seq, _flags, _do)	\
+	nested_lockrestart_do(_trans, _do ?: bch2_trans_commit(_trans, (_disk_res),\
 					(_journal_seq), (_flags)))
 
 #define bch2_trans_do(_c, _disk_res, _journal_seq, _flags, _do)		\
@@ -128,8 +120,19 @@ static inline int bch2_trans_commit(struct btree_trans *trans,
 	int _ret;							\
 									\
 	bch2_trans_init(&trans, (_c), 0, 0);				\
-	_ret = __bch2_trans_do(&trans, _disk_res, _journal_seq, _flags,	\
-			       _do);					\
+	_ret = commit_do(&trans, _disk_res, _journal_seq, _flags, _do);	\
+	bch2_trans_exit(&trans);					\
+									\
+	_ret;								\
+})
+
+#define bch2_trans_run(_c, _do)						\
+({									\
+	struct btree_trans trans;					\
+	int _ret;							\
+									\
+	bch2_trans_init(&trans, (_c), 0, 0);				\
+	_ret = (_do);							\
 	bch2_trans_exit(&trans);					\
 									\
 	_ret;								\

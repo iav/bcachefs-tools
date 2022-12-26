@@ -21,8 +21,10 @@
 
 #include <ctype.h>
 #include <errno.h>
+#include <limits.h>
 #include <string.h>
 
+#include <linux/bug.h>
 #include <linux/compiler.h>
 #include <linux/string.h>
 
@@ -60,6 +62,31 @@ size_t strlcpy(char *dest, const char *src, size_t size)
 		dest[len] = '\0';
 	}
 	return ret;
+}
+
+ssize_t strscpy(char *dest, const char *src, size_t count)
+{
+	long res = 0;
+
+	if (count == 0 || WARN_ON_ONCE(count > INT_MAX))
+		return -E2BIG;
+
+	while (count) {
+		char c;
+
+		c = src[res];
+		dest[res] = c;
+		if (!c)
+			return res;
+		res++;
+		count--;
+	}
+
+	/* Hit buffer length without finding a NUL; force NUL-termination. */
+	if (res)
+		dest[res-1] = '\0';
+
+	return -E2BIG;
 }
 
 void memzero_explicit(void *s, size_t count)

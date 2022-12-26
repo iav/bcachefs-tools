@@ -242,7 +242,7 @@ int bio_add_page(struct bio *, struct page *, unsigned, unsigned);
 struct bio *bio_alloc_clone(struct block_device *, struct bio *,
 			    gfp_t, struct bio_set *);
 
-struct bio *bio_kmalloc(gfp_t, unsigned int);
+struct bio *bio_kmalloc(unsigned int, gfp_t);
 
 extern void bio_endio(struct bio *);
 

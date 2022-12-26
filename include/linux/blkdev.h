@@ -69,8 +69,7 @@ static inline void submit_bio(struct bio *bio)
 	generic_make_request(bio);
 }
 
-int blkdev_issue_discard(struct block_device *, sector_t,
-			 sector_t, gfp_t, unsigned long);
+int blkdev_issue_discard(struct block_device *, sector_t, sector_t, gfp_t);
 
 #define bdev_get_queue(bdev)		(&((bdev)->queue))
 
@@ -85,7 +84,7 @@ int blkdev_issue_discard(struct block_device *, sector_t,
 #define PAGE_SECTORS		(1 << PAGE_SECTORS_SHIFT)
 #define SECTOR_MASK		(PAGE_SECTORS - 1)
 
-#define blk_queue_discard(q)		((void) (q), 0)
+#define bdev_max_discard_sectors(bdev)	((void) (bdev), 0)
 #define blk_queue_nonrot(q)		((void) (q), 0)
 
 unsigned bdev_logical_block_size(struct block_device *bdev);

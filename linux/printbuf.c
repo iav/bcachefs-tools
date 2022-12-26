@@ -2,20 +2,13 @@
 /* Copyright (C) 2022 Kent Overstreet */
 
 #include <linux/err.h>
-#include <linux/math64.h>
-#include <linux/printbuf.h>
-#include <linux/slab.h>
-
-#ifdef __KERNEL__
 #include <linux/export.h>
 #include <linux/kernel.h>
-#else
-#ifndef EXPORT_SYMBOL
-#define EXPORT_SYMBOL(x)
-#endif
-#endif
+#include <linux/printbuf.h>
+#include <linux/slab.h>
+#include <linux/string_helpers.h>
 
-static inline size_t printbuf_linelen(struct printbuf *buf)
+static inline unsigned printbuf_linelen(struct printbuf *buf)
 {
 	return buf->pos - buf->last_newline;
 }
@@ -35,6 +28,11 @@ int printbuf_make_room(struct printbuf *out, unsigned extra)
 		return 0;
 
 	new_size = roundup_pow_of_two(out->size + extra);
+
+	/*
+	 * Note: output buffer must be freeable with kfree(), it's not required
+	 * that the user use printbuf_exit().
+	 */
 	buf = krealloc(out->buf, new_size, !out->atomic ? GFP_KERNEL : GFP_NOWAIT);
 
 	if (!buf) {
@@ -78,25 +76,43 @@ void printbuf_exit(struct printbuf *buf)
 }
 EXPORT_SYMBOL(printbuf_exit);
 
-void prt_newline(struct printbuf *buf)
+void printbuf_tabstops_reset(struct printbuf *buf)
 {
-	unsigned i;
-
-	printbuf_make_room(buf, 1 + buf->indent);
-
-	__prt_char(buf, '\n');
-
-	buf->last_newline	= buf->pos;
-
-	for (i = 0; i < buf->indent; i++)
-		__prt_char(buf, ' ');
-
-	printbuf_nul_terminate(buf);
-
-	buf->last_field		= buf->pos;
-	buf->tabstop = 0;
+	buf->nr_tabstops = 0;
 }
-EXPORT_SYMBOL(prt_newline);
+EXPORT_SYMBOL(printbuf_tabstops_reset);
+
+void printbuf_tabstop_pop(struct printbuf *buf)
+{
+	if (buf->nr_tabstops)
+		--buf->nr_tabstops;
+}
+EXPORT_SYMBOL(printbuf_tabstop_pop);
+
+/*
+ * printbuf_tabstop_set - add a tabstop, n spaces from the previous tabstop
+ *
+ * @buf: printbuf to control
+ * @spaces: number of spaces from previous tabpstop
+ *
+ * In the future this function may allocate memory if setting more than
+ * PRINTBUF_INLINE_TABSTOPS or setting tabstops more than 255 spaces from start
+ * of line.
+ */
+int printbuf_tabstop_push(struct printbuf *buf, unsigned spaces)
+{
+	unsigned prev_tabstop = buf->nr_tabstops
+		? buf->_tabstops[buf->nr_tabstops - 1]
+		: 0;
+
+	if (WARN_ON(buf->nr_tabstops >= ARRAY_SIZE(buf->_tabstops)))
+		return -EINVAL;
+
+	buf->_tabstops[buf->nr_tabstops++] = prev_tabstop + spaces;
+	buf->has_indent_or_tabstops = true;
+	return 0;
+}
+EXPORT_SYMBOL(printbuf_tabstop_push);
 
 /**
  * printbuf_indent_add - add to the current indent level
@@ -113,8 +129,9 @@ void printbuf_indent_add(struct printbuf *buf, unsigned spaces)
 		spaces = 0;
 
 	buf->indent += spaces;
-	while (spaces--)
-		prt_char(buf, ' ');
+	prt_chars(buf, ' ', spaces);
+
+	buf->has_indent_or_tabstops = true;
 }
 EXPORT_SYMBOL(printbuf_indent_add);
 
@@ -137,8 +154,51 @@ void printbuf_indent_sub(struct printbuf *buf, unsigned spaces)
 		printbuf_nul_terminate(buf);
 	}
 	buf->indent -= spaces;
+
+	if (!buf->indent && !buf->nr_tabstops)
+		buf->has_indent_or_tabstops = false;
 }
 EXPORT_SYMBOL(printbuf_indent_sub);
+
+void prt_newline(struct printbuf *buf)
+{
+	unsigned i;
+
+	printbuf_make_room(buf, 1 + buf->indent);
+
+	__prt_char(buf, '\n');
+
+	buf->last_newline	= buf->pos;
+
+	for (i = 0; i < buf->indent; i++)
+		__prt_char(buf, ' ');
+
+	printbuf_nul_terminate(buf);
+
+	buf->last_field		= buf->pos;
+	buf->cur_tabstop	= 0;
+}
+EXPORT_SYMBOL(prt_newline);
+
+/*
+ * Returns spaces from start of line, if set, or 0 if unset:
+ */
+static inline unsigned cur_tabstop(struct printbuf *buf)
+{
+	return buf->cur_tabstop < buf->nr_tabstops
+		? buf->_tabstops[buf->cur_tabstop]
+		: 0;
+}
+
+static void __prt_tab(struct printbuf *out)
+{
+	int spaces = max_t(int, 0, cur_tabstop(out) - printbuf_linelen(out));
+
+	prt_chars(out, ' ', spaces);
+
+	out->last_field = out->pos;
+	out->cur_tabstop++;
+}
 
 /**
  * prt_tab - Advance printbuf to the next tabstop
@@ -149,16 +209,37 @@ EXPORT_SYMBOL(printbuf_indent_sub);
  */
 void prt_tab(struct printbuf *out)
 {
-	int spaces = max_t(int, 0, out->tabstops[out->tabstop] - printbuf_linelen(out));
+	if (WARN_ON(!cur_tabstop(out)))
+		return;
 
-	BUG_ON(out->tabstop > ARRAY_SIZE(out->tabstops));
-
-	prt_chars(out, ' ', spaces);
-
-	out->last_field = out->pos;
-	out->tabstop++;
+	__prt_tab(out);
 }
 EXPORT_SYMBOL(prt_tab);
+
+static void __prt_tab_rjust(struct printbuf *buf)
+{
+	unsigned move = buf->pos - buf->last_field;
+	int pad = (int) cur_tabstop(buf) - (int) printbuf_linelen(buf);
+
+	if (pad > 0) {
+		printbuf_make_room(buf, pad);
+
+		if (buf->last_field + pad < buf->size)
+			memmove(buf->buf + buf->last_field + pad,
+				buf->buf + buf->last_field,
+				min(move, buf->size - 1 - buf->last_field - pad));
+
+		if (buf->last_field < buf->size)
+			memset(buf->buf + buf->last_field, ' ',
+			       min((unsigned) pad, buf->size - buf->last_field));
+
+		buf->pos += pad;
+		printbuf_nul_terminate(buf);
+	}
+
+	buf->last_field = buf->pos;
+	buf->cur_tabstop++;
+}
 
 /**
  * prt_tab_rjust - Advance printbuf to the next tabstop, right justifying
@@ -171,134 +252,64 @@ EXPORT_SYMBOL(prt_tab);
  */
 void prt_tab_rjust(struct printbuf *buf)
 {
-	BUG_ON(buf->tabstop > ARRAY_SIZE(buf->tabstops));
+	if (WARN_ON(!cur_tabstop(buf)))
+		return;
 
-	if (printbuf_linelen(buf) < buf->tabstops[buf->tabstop]) {
-		unsigned move = buf->pos - buf->last_field;
-		unsigned shift = buf->tabstops[buf->tabstop] -
-			printbuf_linelen(buf);
-
-		printbuf_make_room(buf, shift);
-
-		if (buf->last_field + shift < buf->size)
-			memmove(buf->buf + buf->last_field + shift,
-				buf->buf + buf->last_field,
-				min(move, buf->size - 1 - buf->last_field - shift));
-
-		if (buf->last_field < buf->size)
-			memset(buf->buf + buf->last_field, ' ',
-			       min(shift, buf->size - buf->last_field));
-
-		buf->pos += shift;
-		printbuf_nul_terminate(buf);
-	}
-
-	buf->last_field = buf->pos;
-	buf->tabstop++;
+	__prt_tab_rjust(buf);
 }
 EXPORT_SYMBOL(prt_tab_rjust);
 
-enum string_size_units {
-	STRING_UNITS_10,	/* use powers of 10^3 (standard SI) */
-	STRING_UNITS_2,		/* use binary powers of 2^10 */
-};
-static int string_get_size(u64 size, u64 blk_size,
-			   const enum string_size_units units,
-			   char *buf, int len)
+/**
+ * prt_bytes_indented - Print an array of chars, handling embedded control characters
+ *
+ * @out: printbuf to output to
+ * @str: string to print
+ * @count: number of bytes to print
+ *
+ * The following contol characters are handled as so:
+ *   \n: prt_newline	newline that obeys current indent level
+ *   \t: prt_tab	advance to next tabstop
+ *   \r: prt_tab_rjust	advance to next tabstop, with right justification
+ */
+void prt_bytes_indented(struct printbuf *out, const char *str, unsigned count)
 {
-	static const char *const units_10[] = {
-		"B", "kB", "MB", "GB", "TB", "PB", "EB", "ZB", "YB"
-	};
-	static const char *const units_2[] = {
-		"B", "KiB", "MiB", "GiB", "TiB", "PiB", "EiB", "ZiB", "YiB"
-	};
-	static const char *const *const units_str[] = {
-		[STRING_UNITS_10] = units_10,
-		[STRING_UNITS_2] = units_2,
-	};
-	static const unsigned int divisor[] = {
-		[STRING_UNITS_10] = 1000,
-		[STRING_UNITS_2] = 1024,
-	};
-	static const unsigned int rounding[] = { 500, 50, 5 };
-	int i = 0, j;
-	u32 remainder = 0, sf_cap;
-	char tmp[13];
-	const char *unit;
+	const char *unprinted_start = str;
+	const char *end = str + count;
 
-	tmp[0] = '\0';
-
-	if (blk_size == 0)
-		size = 0;
-	if (size == 0)
-		goto out;
-
-	/* This is Napier's algorithm.  Reduce the original block size to
-	 *
-	 * coefficient * divisor[units]^i
-	 *
-	 * we do the reduction so both coefficients are just under 32 bits so
-	 * that multiplying them together won't overflow 64 bits and we keep
-	 * as much precision as possible in the numbers.
-	 *
-	 * Note: it's safe to throw away the remainders here because all the
-	 * precision is in the coefficients.
-	 */
-	while (blk_size >> 32) {
-		do_div(blk_size, divisor[units]);
-		i++;
+	if (!out->has_indent_or_tabstops || out->suppress_indent_tabstop_handling) {
+		prt_bytes(out, str, count);
+		return;
 	}
 
-	while (size >> 32) {
-		do_div(size, divisor[units]);
-		i++;
+	while (str != end) {
+		switch (*str) {
+		case '\n':
+			prt_bytes(out, unprinted_start, str - unprinted_start);
+			unprinted_start = str + 1;
+			prt_newline(out);
+			break;
+		case '\t':
+			if (likely(cur_tabstop(out))) {
+				prt_bytes(out, unprinted_start, str - unprinted_start);
+				unprinted_start = str + 1;
+				__prt_tab(out);
+			}
+			break;
+		case '\r':
+			if (likely(cur_tabstop(out))) {
+				prt_bytes(out, unprinted_start, str - unprinted_start);
+				unprinted_start = str + 1;
+				__prt_tab_rjust(out);
+			}
+			break;
+		}
+
+		str++;
 	}
 
-	/* now perform the actual multiplication keeping i as the sum of the
-	 * two logarithms */
-	size *= blk_size;
-
-	/* and logarithmically reduce it until it's just under the divisor */
-	while (size >= divisor[units]) {
-		remainder = do_div(size, divisor[units]);
-		i++;
-	}
-
-	/* work out in j how many digits of precision we need from the
-	 * remainder */
-	sf_cap = size;
-	for (j = 0; sf_cap*10 < 1000; j++)
-		sf_cap *= 10;
-
-	if (units == STRING_UNITS_2) {
-		/* express the remainder as a decimal.  It's currently the
-		 * numerator of a fraction whose denominator is
-		 * divisor[units], which is 1 << 10 for STRING_UNITS_2 */
-		remainder *= 1000;
-		remainder >>= 10;
-	}
-
-	/* add a 5 to the digit below what will be printed to ensure
-	 * an arithmetical round up and carry it through to size */
-	remainder += rounding[j];
-	if (remainder >= 1000) {
-		remainder -= 1000;
-		size += 1;
-	}
-
-	if (j) {
-		snprintf(tmp, sizeof(tmp), ".%03u", remainder);
-		tmp[j+1] = '\0';
-	}
-
- out:
-	if (i >= ARRAY_SIZE(units_2))
-		unit = "UNK";
-	else
-		unit = units_str[units][i];
-
-	return snprintf(buf, len, "%u%s %s", (u32)size, tmp, unit);
+	prt_bytes(out, unprinted_start, str - unprinted_start);
 }
+EXPORT_SYMBOL(prt_bytes_indented);
 
 /**
  * prt_human_readable_u64 - Print out a u64 in human readable units

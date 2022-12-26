@@ -113,7 +113,7 @@ int submit_bio_wait(struct bio *bio)
 
 int blkdev_issue_discard(struct block_device *bdev,
 			 sector_t sector, sector_t nr_sects,
-			 gfp_t gfp_mask, unsigned long flags)
+			 gfp_t gfp_mask)
 {
 	return 0;
 }
@@ -180,13 +180,26 @@ struct block_device *blkdev_get_by_path(const char *path, fmode_t mode,
 	if (mode & FMODE_EXCL)
 		flags |= O_EXCL;
 #endif
+	buffered_fd = open(path, flags);
+	if (buffered_fd < 0)
+		return ERR_PTR(-errno);
 
 	fd = open(path, flags|O_DIRECT);
 	if (fd < 0)
+		fd = dup(buffered_fd);
+	if (fd < 0) {
+		close(buffered_fd);
 		return ERR_PTR(-errno);
+	}
 
-	sync_fd	= xopen(path, flags|O_DIRECT|O_SYNC);
-	buffered_fd = xopen(path, flags);
+	sync_fd	= open(path, flags|O_DIRECT|O_SYNC);
+	if (sync_fd < 0)
+		sync_fd	= open(path, flags|O_SYNC);
+	if (sync_fd < 0) {
+		close(fd);
+		close(buffered_fd);
+		return ERR_PTR(-errno);
+	}
 
 	bdev = malloc(sizeof(*bdev));
 	memset(bdev, 0, sizeof(*bdev));

@@ -55,7 +55,7 @@ int cmd_unlock(int argc, char *argv[])
 	struct bch_sb_handle sb;
 	int ret = bch2_read_super(dev, &opts, &sb);
 	if (ret)
-		die("Error opening %s: %s", dev, strerror(-ret));
+		die("Error opening %s: %s", dev, bch2_err_str(ret));
 
 	if (!bch2_sb_is_encrypted(sb.sb))
 		die("%s is not encrypted", dev);
@@ -90,7 +90,7 @@ int cmd_set_passphrase(int argc, char *argv[])
 
 	c = bch2_fs_open(argv + 1, argc - 1, opts);
 	if (IS_ERR(c))
-		die("Error opening %s: %s", argv[1], strerror(-PTR_ERR(c)));
+		die("Error opening %s: %s", argv[1], bch2_err_str(PTR_ERR(c)));
 
 	struct bch_sb_field_crypt *crypt = bch2_sb_get_crypt(c->disk_sb.sb);
 	if (!crypt)
@@ -127,7 +127,7 @@ int cmd_remove_passphrase(int argc, char *argv[])
 	opt_set(opts, nostart, true);
 	c = bch2_fs_open(argv + 1, argc - 1, opts);
 	if (IS_ERR(c))
-		die("Error opening %s: %s", argv[1], strerror(-PTR_ERR(c)));
+		die("Error opening %s: %s", argv[1], bch2_err_str(PTR_ERR(c)));
 
 	struct bch_sb_field_crypt *crypt = bch2_sb_get_crypt(c->disk_sb.sb);
 	if (!crypt)

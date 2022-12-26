@@ -89,7 +89,7 @@ int cmd_fsck(int argc, char *argv[])
 
 	struct bch_fs *c = bch2_fs_open(argv, argc, opts);
 	if (IS_ERR(c)) {
-		fprintf(stderr, "error opening %s: %s\n", argv[0], strerror(-PTR_ERR(c)));
+		fprintf(stderr, "error opening %s: %s\n", argv[0], bch2_err_str(PTR_ERR(c)));
 		exit(8);
 	}
 

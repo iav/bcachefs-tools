@@ -4,8 +4,7 @@
 
 #include "bcachefs.h"
 #include "btree_types.h"
-
-extern struct lock_class_key bch2_btree_node_lock_key;
+#include "bkey_methods.h"
 
 extern const char * const bch2_btree_node_flags[];
 
@@ -28,13 +27,13 @@ struct btree *bch2_btree_node_get(struct btree_trans *, struct btree_path *,
 				  const struct bkey_i *, unsigned,
 				  enum six_lock_type, unsigned long);
 
-struct btree *bch2_btree_node_get_noiter(struct bch_fs *, const struct bkey_i *,
+struct btree *bch2_btree_node_get_noiter(struct btree_trans *, const struct bkey_i *,
 					 enum btree_id, unsigned, bool);
 
 int bch2_btree_node_prefetch(struct bch_fs *, struct btree_trans *, struct btree_path *,
 			     const struct bkey_i *, enum btree_id, unsigned);
 
-void bch2_btree_node_evict(struct bch_fs *, const struct bkey_i *);
+void bch2_btree_node_evict(struct btree_trans *, const struct bkey_i *);
 
 void bch2_fs_btree_cache_exit(struct bch_fs *);
 int bch2_fs_btree_cache_init(struct bch_fs *);
@@ -102,6 +101,6 @@ static inline unsigned btree_blocks(struct bch_fs *c)
 
 void bch2_btree_node_to_text(struct printbuf *, struct bch_fs *,
 			     struct btree *);
-void bch2_btree_cache_to_text(struct printbuf *, struct bch_fs *);
+void bch2_btree_cache_to_text(struct printbuf *, struct btree_cache *);
 
 #endif /* _BCACHEFS_BTREE_CACHE_H */

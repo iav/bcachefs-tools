@@ -2,6 +2,7 @@
 
 #include "bcachefs.h"
 #include "btree_key_cache.h"
+#include "errcode.h"
 #include "error.h"
 #include "journal.h"
 #include "journal_io.h"
@@ -231,7 +232,7 @@ void bch2_journal_space_available(struct journal *j)
 	if ((j->space[journal_space_clean_ondisk].next_entry <
 	     j->space[journal_space_clean_ondisk].total) &&
 	    (clean - clean_ondisk <= total / 8) &&
-	    (clean_ondisk * 2 > clean ))
+	    (clean_ondisk * 2 > clean))
 		set_bit(JOURNAL_MAY_SKIP_FLUSH, &j->flags);
 	else
 		clear_bit(JOURNAL_MAY_SKIP_FLUSH, &j->flags);
@@ -282,11 +283,11 @@ void bch2_journal_do_discards(struct journal *j)
 		while (should_discard_bucket(j, ja)) {
 			if (!c->opts.nochanges &&
 			    ca->mi.discard &&
-			    blk_queue_discard(bdev_get_queue(ca->disk_sb.bdev)))
+			    bdev_max_discard_sectors(ca->disk_sb.bdev))
 				blkdev_issue_discard(ca->disk_sb.bdev,
 					bucket_to_sector(ca,
 						ja->buckets[ja->discard_idx]),
-					ca->mi.bucket_size, GFP_NOIO, 0);
+					ca->mi.bucket_size, GFP_NOIO);
 
 			spin_lock(&j->lock);
 			ja->discard_idx = (ja->discard_idx + 1) % ja->nr;
@@ -362,7 +363,7 @@ static inline void __journal_pin_drop(struct journal *j,
 	list_del_init(&pin->list);
 
 	/*
-	 * Unpinning a journal entry make make journal_next_bucket() succeed, if
+	 * Unpinning a journal entry may make journal_next_bucket() succeed if
 	 * writing a new last_seq will now make another bucket available:
 	 */
 	if (atomic_dec_and_test(&pin_list->count) &&
@@ -640,7 +641,8 @@ static int __bch2_journal_reclaim(struct journal *j, bool direct, bool kicked)
 
 		min_key_cache = min(bch2_nr_btree_keys_need_flush(c), (size_t) 128);
 
-		trace_journal_reclaim_start(c, direct, kicked,
+		trace_and_count(c, journal_reclaim_start, c,
+				direct, kicked,
 				min_nr, min_key_cache,
 				j->prereserved.reserved,
 				j->prereserved.remaining,
@@ -656,7 +658,7 @@ static int __bch2_journal_reclaim(struct journal *j, bool direct, bool kicked)
 			j->nr_direct_reclaim += nr_flushed;
 		else
 			j->nr_background_reclaim += nr_flushed;
-		trace_journal_reclaim_finish(c, nr_flushed);
+		trace_and_count(c, journal_reclaim_finish, c, nr_flushed);
 
 		if (nr_flushed)
 			wake_up(&j->reclaim_wait);
@@ -740,15 +742,17 @@ int bch2_journal_reclaim_start(struct journal *j)
 {
 	struct bch_fs *c = container_of(j, struct bch_fs, journal);
 	struct task_struct *p;
+	int ret;
 
 	if (j->reclaim_thread)
 		return 0;
 
 	p = kthread_create(bch2_journal_reclaim_thread, j,
 			   "bch-reclaim/%s", c->name);
-	if (IS_ERR(p)) {
-		bch_err(c, "error creating journal reclaim thread: %li", PTR_ERR(p));
-		return PTR_ERR(p);
+	ret = PTR_ERR_OR_ZERO(p);
+	if (ret) {
+		bch_err(c, "error creating journal reclaim thread: %s", bch2_err_str(ret));
+		return ret;
 	}
 
 	get_task_struct(p);

@@ -19,6 +19,7 @@ static inline void init_rwsem(struct rw_semaphore *lock)
 }
 
 #define down_read(l)		pthread_rwlock_rdlock(&(l)->lock)
+#define down_read_killable(l)	(pthread_rwlock_rdlock(&(l)->lock), 0)
 #define down_read_trylock(l)	(!pthread_rwlock_tryrdlock(&(l)->lock))
 #define up_read(l)		pthread_rwlock_unlock(&(l)->lock)
 

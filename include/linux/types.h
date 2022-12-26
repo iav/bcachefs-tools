@@ -25,7 +25,6 @@ typedef unsigned short		umode_t;
 
 typedef unsigned gfp_t;
 
-#define GFP_KERNEL	0
 #define GFP_ATOMIC	0
 #define GFP_NOFS	0
 #define GFP_NOIO	0
@@ -36,6 +35,7 @@ typedef unsigned gfp_t;
 #define __GFP_NORETRY	0
 #define __GFP_NOFAIL	0
 #define __GFP_ZERO	1
+#define GFP_KERNEL	2
 
 #define PAGE_ALLOC_COSTLY_ORDER	6
 

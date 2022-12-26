@@ -78,7 +78,7 @@ int bch2_xattr_invalid(const struct bch_fs *c, struct bkey_s_c k,
 	if (bkey_val_bytes(k.k) < sizeof(struct bch_xattr)) {
 		prt_printf(err, "incorrect value size (%zu < %zu)",
 		       bkey_val_bytes(k.k), sizeof(*xattr.v));
-		return -EINVAL;
+		return -BCH_ERR_invalid_bkey;
 	}
 
 	if (bkey_val_u64s(k.k) <
@@ -88,7 +88,7 @@ int bch2_xattr_invalid(const struct bch_fs *c, struct bkey_s_c k,
 		       bkey_val_u64s(k.k),
 		       xattr_val_u64s(xattr.v->x_name_len,
 				      le16_to_cpu(xattr.v->x_val_len)));
-		return -EINVAL;
+		return -BCH_ERR_invalid_bkey;
 	}
 
 	/* XXX why +4 ? */
@@ -99,18 +99,18 @@ int bch2_xattr_invalid(const struct bch_fs *c, struct bkey_s_c k,
 		       bkey_val_u64s(k.k),
 		       xattr_val_u64s(xattr.v->x_name_len,
 				      le16_to_cpu(xattr.v->x_val_len) + 4));
-		return -EINVAL;
+		return -BCH_ERR_invalid_bkey;
 	}
 
 	handler = bch2_xattr_type_to_handler(xattr.v->x_type);
 	if (!handler) {
 		prt_printf(err, "invalid type (%u)", xattr.v->x_type);
-		return -EINVAL;
+		return -BCH_ERR_invalid_bkey;
 	}
 
 	if (memchr(xattr.v->x_name, '\0', xattr.v->x_name_len)) {
 		prt_printf(err, "xattr name has invalid characters");
-		return -EINVAL;
+		return -BCH_ERR_invalid_bkey;
 	}
 
 	return 0;
@@ -344,23 +344,25 @@ retry:
 	offset = iter.pos.offset;
 	bch2_trans_iter_exit(&trans, &iter);
 err:
-	if (ret == -EINTR)
+	if (bch2_err_matches(ret, BCH_ERR_transaction_restart))
 		goto retry;
 
 	bch2_trans_exit(&trans);
 
 	if (ret)
-		return ret;
+		goto out;
 
 	ret = bch2_xattr_list_bcachefs(c, &inode->ei_inode, &buf, false);
 	if (ret)
-		return ret;
+		goto out;
 
 	ret = bch2_xattr_list_bcachefs(c, &inode->ei_inode, &buf, true);
 	if (ret)
-		return ret;
+		goto out;
 
 	return buf.used;
+out:
+	return bch2_err_class(ret);
 }
 
 static int bch2_xattr_get_handler(const struct xattr_handler *handler,
@@ -369,8 +371,10 @@ static int bch2_xattr_get_handler(const struct xattr_handler *handler,
 {
 	struct bch_inode_info *inode = to_bch_ei(vinode);
 	struct bch_fs *c = inode->v.i_sb->s_fs_info;
+	int ret;
 
-	return bch2_xattr_get(c, inode, name, buffer, size, handler->flags);
+	ret = bch2_xattr_get(c, inode, name, buffer, size, handler->flags);
+	return bch2_err_class(ret);
 }
 
 static int bch2_xattr_set_handler(const struct xattr_handler *handler,
@@ -382,11 +386,13 @@ static int bch2_xattr_set_handler(const struct xattr_handler *handler,
 	struct bch_inode_info *inode = to_bch_ei(vinode);
 	struct bch_fs *c = inode->v.i_sb->s_fs_info;
 	struct bch_hash_info hash = bch2_hash_info_init(c, &inode->ei_inode);
+	int ret;
 
-	return bch2_trans_do(c, NULL, NULL, 0,
+	ret = bch2_trans_do(c, NULL, NULL, 0,
 			bch2_xattr_set(&trans, inode_inum(inode), &hash,
 				       name, value, size,
 				       handler->flags, flags));
+	return bch2_err_class(ret);
 }
 
 static const struct xattr_handler bch_xattr_user_handler = {
@@ -438,7 +444,7 @@ static int __bch2_xattr_bcachefs_get(const struct xattr_handler *handler,
 	struct bch_inode_info *inode = to_bch_ei(vinode);
 	struct bch_fs *c = inode->v.i_sb->s_fs_info;
 	struct bch_opts opts =
-		bch2_inode_opts_to_opts(bch2_inode_opts_get(&inode->ei_inode));
+		bch2_inode_opts_to_opts(&inode->ei_inode);
 	const struct bch_option *opt;
 	int id, inode_opt_id;
 	struct printbuf out = PRINTBUF;

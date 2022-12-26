@@ -4,6 +4,8 @@
 #include <urcu.h>
 #include <linux/compiler.h>
 
+#define ULONG_CMP_GE(a, b)      (ULONG_MAX / 2 >= (a) - (b))
+
 #define rcu_dereference_check(p, c)	rcu_dereference(p)
 #define rcu_dereference_raw(p)		rcu_dereference(p)
 #define rcu_dereference_protected(p, c)	rcu_dereference(p)

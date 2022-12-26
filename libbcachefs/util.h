@@ -18,37 +18,14 @@
 #include <linux/slab.h>
 #include <linux/vmalloc.h>
 #include <linux/workqueue.h>
+#include <linux/mean_and_variance.h>
 
 struct closure;
 
 #ifdef CONFIG_BCACHEFS_DEBUG
-
 #define EBUG_ON(cond)		BUG_ON(cond)
-#define atomic_dec_bug(v)	BUG_ON(atomic_dec_return(v) < 0)
-#define atomic_inc_bug(v, i)	BUG_ON(atomic_inc_return(v) <= i)
-#define atomic_sub_bug(i, v)	BUG_ON(atomic_sub_return(i, v) < 0)
-#define atomic_add_bug(i, v)	BUG_ON(atomic_add_return(i, v) < 0)
-#define atomic_long_dec_bug(v)		BUG_ON(atomic_long_dec_return(v) < 0)
-#define atomic_long_sub_bug(i, v)	BUG_ON(atomic_long_sub_return(i, v) < 0)
-#define atomic64_dec_bug(v)	BUG_ON(atomic64_dec_return(v) < 0)
-#define atomic64_inc_bug(v, i)	BUG_ON(atomic64_inc_return(v) <= i)
-#define atomic64_sub_bug(i, v)	BUG_ON(atomic64_sub_return(i, v) < 0)
-#define atomic64_add_bug(i, v)	BUG_ON(atomic64_add_return(i, v) < 0)
-
-#else /* DEBUG */
-
+#else
 #define EBUG_ON(cond)
-#define atomic_dec_bug(v)	atomic_dec(v)
-#define atomic_inc_bug(v, i)	atomic_inc(v)
-#define atomic_sub_bug(i, v)	atomic_sub(i, v)
-#define atomic_add_bug(i, v)	atomic_add(i, v)
-#define atomic_long_dec_bug(v)		atomic_long_dec(v)
-#define atomic_long_sub_bug(i, v)	atomic_long_sub(i, v)
-#define atomic64_dec_bug(v)	atomic64_dec(v)
-#define atomic64_inc_bug(v, i)	atomic64_inc(v)
-#define atomic64_sub_bug(i, v)	atomic64_sub(i, v)
-#define atomic64_add_bug(i, v)	atomic64_add(i, v)
-
 #endif
 
 #if __BYTE_ORDER__ == __ORDER_LITTLE_ENDIAN__
@@ -353,6 +330,11 @@ bool bch2_is_zero(const void *, size_t);
 
 u64 bch2_read_flag_list(char *, const char * const[]);
 
+void bch2_prt_u64_binary(struct printbuf *, u64, unsigned);
+
+void bch2_print_string_as_lines(const char *prefix, const char *lines);
+int bch2_prt_backtrace(struct printbuf *, struct task_struct *);
+
 #define NR_QUANTILES	15
 #define QUANTILE_IDX(i)	inorder_to_eytzinger0(i, NR_QUANTILES)
 #define QUANTILE_FIRST	eytzinger0_first(NR_QUANTILES)
@@ -375,14 +357,18 @@ struct time_stat_buffer {
 
 struct time_stats {
 	spinlock_t	lock;
-	u64		count;
 	/* all fields are in nanoseconds */
-	u64		average_duration;
-	u64		average_frequency;
 	u64		max_duration;
+	u64             min_duration;
+	u64             max_freq;
+	u64             min_freq;
 	u64		last_event;
 	struct quantiles quantiles;
 
+	struct mean_and_variance	  duration_stats;
+	struct mean_and_variance_weighted duration_stats_weighted;
+	struct mean_and_variance	  freq_stats;
+	struct mean_and_variance_weighted freq_stats_weighted;
 	struct time_stat_buffer __percpu *buffer;
 };
 

@@ -179,8 +179,9 @@ static void fs_usage_to_text(struct printbuf *out, const char *path)
 	pr_uuid(out, fs.uuid.b);
 	prt_newline(out);
 
-	out->tabstops[0] = 20;
-	out->tabstops[1] = 36;
+	printbuf_tabstops_reset(out);
+	printbuf_tabstop_push(out, 20);
+	printbuf_tabstop_push(out, 16);
 
 	prt_str(out, "Size:");
 	prt_tab(out);
@@ -202,10 +203,11 @@ static void fs_usage_to_text(struct printbuf *out, const char *path)
 
 	prt_newline(out);
 
-	out->tabstops[0] = 16;
-	out->tabstops[1] = 32;
-	out->tabstops[2] = 50;
-	out->tabstops[3] = 68;
+	printbuf_tabstops_reset(out);
+	printbuf_tabstop_push(out, 16);
+	printbuf_tabstop_push(out, 16);
+	printbuf_tabstop_push(out, 18);
+	printbuf_tabstop_push(out, 18);
 
 	prt_str(out, "Data type");
 	prt_tab(out);
@@ -255,10 +257,11 @@ static void fs_usage_to_text(struct printbuf *out, const char *path)
 	sort(dev_names.data, dev_names.nr,
 	     sizeof(dev_names.data[0]), dev_by_label_cmp, NULL);
 
-	out->tabstops[0] = 16;
-	out->tabstops[1] = 36;
-	out->tabstops[2] = 52;
-	out->tabstops[3] = 68;
+	printbuf_tabstops_reset(out);
+	printbuf_tabstop_push(out, 16);
+	printbuf_tabstop_push(out, 20);
+	printbuf_tabstop_push(out, 16);
+	printbuf_tabstop_push(out, 14);
 
 	darray_for_each(dev_names, dev)
 		dev_usage_to_text(out, fs, dev);

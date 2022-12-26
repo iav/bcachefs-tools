@@ -24,7 +24,7 @@ struct shrinker {
 	struct list_head list;
 };
 
-int register_shrinker(struct shrinker *);
+int register_shrinker(struct shrinker *, const char *, ...);
 void unregister_shrinker(struct shrinker *);
 
 void run_shrinkers(gfp_t gfp_mask, bool);

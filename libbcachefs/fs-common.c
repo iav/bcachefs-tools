@@ -212,6 +212,11 @@ int bch2_link_trans(struct btree_trans *trans,
 	if (ret)
 		goto err;
 
+	if (bch2_reinherit_attrs(inode_u, dir_u)) {
+		ret = -EXDEV;
+		goto err;
+	}
+
 	dir_u->bi_mtime = dir_u->bi_ctime = now;
 
 	dir_hash = bch2_hash_info_init(c, dir_u);
@@ -482,11 +487,11 @@ int bch2_rename_trans(struct btree_trans *trans,
 	ret =   bch2_inode_write(trans, &src_dir_iter, src_dir_u) ?:
 		(src_dir.inum != dst_dir.inum
 		 ? bch2_inode_write(trans, &dst_dir_iter, dst_dir_u)
-		 : 0 ) ?:
+		 : 0) ?:
 		bch2_inode_write(trans, &src_inode_iter, src_inode_u) ?:
 		(dst_inum.inum
 		 ? bch2_inode_write(trans, &dst_inode_iter, dst_inode_u)
-		 : 0 );
+		 : 0);
 err:
 	bch2_trans_iter_exit(trans, &dst_inode_iter);
 	bch2_trans_iter_exit(trans, &src_inode_iter);

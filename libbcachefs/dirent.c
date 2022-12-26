@@ -92,46 +92,46 @@ int bch2_dirent_invalid(const struct bch_fs *c, struct bkey_s_c k,
 	if (bkey_val_bytes(k.k) < sizeof(struct bch_dirent)) {
 		prt_printf(err, "incorrect value size (%zu < %zu)",
 		       bkey_val_bytes(k.k), sizeof(*d.v));
-		return -EINVAL;
+		return -BCH_ERR_invalid_bkey;
 	}
 
 	len = bch2_dirent_name_bytes(d);
 	if (!len) {
 		prt_printf(err, "empty name");
-		return -EINVAL;
+		return -BCH_ERR_invalid_bkey;
 	}
 
 	if (bkey_val_u64s(k.k) > dirent_val_u64s(len)) {
 		prt_printf(err, "value too big (%zu > %u)",
-		       bkey_val_u64s(k.k),dirent_val_u64s(len));
-		return -EINVAL;
+		       bkey_val_u64s(k.k), dirent_val_u64s(len));
+		return -BCH_ERR_invalid_bkey;
 	}
 
 	if (len > BCH_NAME_MAX) {
 		prt_printf(err, "dirent name too big (%u > %u)",
 		       len, BCH_NAME_MAX);
-		return -EINVAL;
+		return -BCH_ERR_invalid_bkey;
 	}
 
 	if (len == 1 && !memcmp(d.v->d_name, ".", 1)) {
 		prt_printf(err, "invalid name");
-		return -EINVAL;
+		return -BCH_ERR_invalid_bkey;
 	}
 
 	if (len == 2 && !memcmp(d.v->d_name, "..", 2)) {
 		prt_printf(err, "invalid name");
-		return -EINVAL;
+		return -BCH_ERR_invalid_bkey;
 	}
 
 	if (memchr(d.v->d_name, '/', len)) {
 		prt_printf(err, "invalid name");
-		return -EINVAL;
+		return -BCH_ERR_invalid_bkey;
 	}
 
 	if (d.v->d_type != DT_SUBVOL &&
 	    le64_to_cpu(d.v->d_inum) == d.k->p.inode) {
 		prt_printf(err, "dirent points to own directory");
-		return -EINVAL;
+		return -BCH_ERR_invalid_bkey;
 	}
 
 	return 0;
@@ -350,8 +350,8 @@ int bch2_dirent_rename(struct btree_trans *trans,
 		bkey_init(&new_src->k);
 		new_src->k.p = src_iter.pos;
 
-		if (bkey_cmp(dst_pos, src_iter.pos) <= 0 &&
-		    bkey_cmp(src_iter.pos, dst_iter.pos) < 0) {
+		if (bkey_le(dst_pos, src_iter.pos) &&
+		    bkey_lt(src_iter.pos, dst_iter.pos)) {
 			/*
 			 * We have a hash collision for the new dst key,
 			 * and new_src - the key we're deleting - is between
@@ -471,7 +471,7 @@ retry:
 
 	ret = __bch2_dirent_lookup_trans(&trans, &iter, dir, hash_info,
 					  name, inum, 0);
-	if (ret == -EINTR)
+	if (bch2_err_matches(ret, BCH_ERR_transaction_restart))
 		goto retry;
 	if (!ret)
 		bch2_trans_iter_exit(&trans, &iter);
@@ -556,7 +556,7 @@ retry:
 	}
 	bch2_trans_iter_exit(&trans, &iter);
 err:
-	if (ret == -EINTR)
+	if (bch2_err_matches(ret, BCH_ERR_transaction_restart))
 		goto retry;
 
 	bch2_trans_exit(&trans);

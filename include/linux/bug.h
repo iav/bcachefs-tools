@@ -2,6 +2,7 @@
 #define __TOOLS_LINUX_BUG_H
 
 #include <assert.h>
+#include <stdio.h>
 #include <linux/compiler.h>
 
 #ifdef CONFIG_VALGRIND

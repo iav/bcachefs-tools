@@ -81,6 +81,11 @@ static inline u64 local_clock(void)
 	return sched_clock();
 }
 
+static inline u64 ktime_get_ns(void)
+{
+	return sched_clock();
+}
+
 #define jiffies			nsecs_to_jiffies(sched_clock())
 
 #endif

@@ -147,7 +147,7 @@ struct bpos {
 #else
 #error edit for your odd byteorder.
 #endif
-} __attribute__((packed, aligned(4)));
+} __packed __aligned(4);
 
 #define KEY_INODE_MAX			((__u64)~0ULL)
 #define KEY_OFFSET_MAX			((__u64)~0ULL)
@@ -181,7 +181,7 @@ struct bversion {
 	__u32		hi;
 	__u64		lo;
 #endif
-} __attribute__((packed, aligned(4)));
+} __packed __aligned(4);
 
 struct bkey {
 	/* Size of combined key and value, in u64s */
@@ -214,7 +214,7 @@ struct bkey {
 
 	__u8		pad[1];
 #endif
-} __attribute__((packed, aligned(8)));
+} __packed __aligned(8);
 
 struct bkey_packed {
 	__u64		_data[0];
@@ -248,7 +248,7 @@ struct bkey_packed {
 	 * to the same size as struct bkey should hopefully be safest.
 	 */
 	__u8		pad[sizeof(struct bkey) - 3];
-} __attribute__((packed, aligned(8)));
+} __packed __aligned(8);
 
 #define BKEY_U64s			(sizeof(struct bkey) / sizeof(__u64))
 #define BKEY_U64s_MAX			U8_MAX
@@ -336,7 +336,7 @@ static inline void bkey_init(struct bkey *k)
  *   number.
  *
  * - WHITEOUT: for hash table btrees
-*/
+ */
 #define BCH_BKEY_TYPES()				\
 	x(deleted,		0)			\
 	x(whiteout,		1)			\
@@ -366,7 +366,9 @@ static inline void bkey_init(struct bkey *k)
 	x(set,			25)			\
 	x(lru,			26)			\
 	x(alloc_v4,		27)			\
-	x(backpointer,		28)
+	x(backpointer,		28)			\
+	x(inode_v3,		29)			\
+	x(bucket_gens,		30)
 
 enum bch_bkey_type {
 #define x(name, nr) KEY_TYPE_##name	= nr,
@@ -477,7 +479,7 @@ struct bch_set {
 struct bch_csum {
 	__le64			lo;
 	__le64			hi;
-} __attribute__((packed, aligned(8)));
+} __packed __aligned(8);
 
 #define BCH_EXTENT_ENTRY_TYPES()		\
 	x(ptr,			0)		\
@@ -514,7 +516,7 @@ struct bch_extent_crc32 {
 				_compressed_size:7,
 				type:2;
 #endif
-} __attribute__((packed, aligned(8)));
+} __packed __aligned(8);
 
 #define CRC32_SIZE_MAX		(1U << 7)
 #define CRC32_NONCE_MAX		0
@@ -540,7 +542,7 @@ struct bch_extent_crc64 {
 				type:3;
 #endif
 	__u64			csum_lo;
-} __attribute__((packed, aligned(8)));
+} __packed __aligned(8);
 
 #define CRC64_SIZE_MAX		(1U << 9)
 #define CRC64_NONCE_MAX		((1U << 10) - 1)
@@ -564,7 +566,7 @@ struct bch_extent_crc128 {
 				type:4;
 #endif
 	struct bch_csum		csum;
-} __attribute__((packed, aligned(8)));
+} __packed __aligned(8);
 
 #define CRC128_SIZE_MAX		(1U << 13)
 #define CRC128_NONCE_MAX	((1U << 13) - 1)
@@ -577,7 +579,7 @@ struct bch_extent_ptr {
 	__u64			type:1,
 				cached:1,
 				unused:1,
-				reservation:1,
+				unwritten:1,
 				offset:44, /* 8 petabytes */
 				dev:8,
 				gen:8;
@@ -585,12 +587,12 @@ struct bch_extent_ptr {
 	__u64			gen:8,
 				dev:8,
 				offset:44,
-				reservation:1,
+				unwritten:1,
 				unused:1,
 				cached:1,
 				type:1;
 #endif
-} __attribute__((packed, aligned(8)));
+} __packed __aligned(8);
 
 struct bch_extent_stripe_ptr {
 #if defined(__LITTLE_ENDIAN_BITFIELD)
@@ -642,7 +644,7 @@ struct bch_btree_ptr {
 
 	__u64			_data[0];
 	struct bch_extent_ptr	start[];
-} __attribute__((packed, aligned(8)));
+} __packed __aligned(8);
 
 struct bch_btree_ptr_v2 {
 	struct bch_val		v;
@@ -654,7 +656,7 @@ struct bch_btree_ptr_v2 {
 	struct bpos		min_key;
 	__u64			_data[0];
 	struct bch_extent_ptr	start[];
-} __attribute__((packed, aligned(8)));
+} __packed __aligned(8);
 
 LE16_BITMASK(BTREE_PTR_RANGE_UPDATED,	struct bch_btree_ptr_v2, flags, 0, 1);
 
@@ -663,7 +665,7 @@ struct bch_extent {
 
 	__u64			_data[0];
 	union bch_extent_entry	start[];
-} __attribute__((packed, aligned(8)));
+} __packed __aligned(8);
 
 struct bch_reservation {
 	struct bch_val		v;
@@ -671,7 +673,7 @@ struct bch_reservation {
 	__le32			generation;
 	__u8			nr_replicas;
 	__u8			pad[3];
-} __attribute__((packed, aligned(8)));
+} __packed __aligned(8);
 
 /* Maximum size (in u64s) a single pointer could be: */
 #define BKEY_EXTENT_PTR_U64s_MAX\
@@ -705,7 +707,7 @@ struct bch_inode {
 	__le32			bi_flags;
 	__le16			bi_mode;
 	__u8			fields[0];
-} __attribute__((packed, aligned(8)));
+} __packed __aligned(8);
 
 struct bch_inode_v2 {
 	struct bch_val		v;
@@ -715,20 +717,35 @@ struct bch_inode_v2 {
 	__le64			bi_flags;
 	__le16			bi_mode;
 	__u8			fields[0];
-} __attribute__((packed, aligned(8)));
+} __packed __aligned(8);
+
+struct bch_inode_v3 {
+	struct bch_val		v;
+
+	__le64			bi_journal_seq;
+	__le64			bi_hash_seed;
+	__le64			bi_flags;
+	__le64			bi_sectors;
+	__le64			bi_size;
+	__le64			bi_version;
+	__u8			fields[0];
+} __packed __aligned(8);
+
+#define INODEv3_FIELDS_START_INITIAL	6
+#define INODEv3_FIELDS_START_CUR	(offsetof(struct bch_inode_v3, fields) / sizeof(u64))
 
 struct bch_inode_generation {
 	struct bch_val		v;
 
 	__le32			bi_generation;
 	__le32			pad;
-} __attribute__((packed, aligned(8)));
+} __packed __aligned(8);
 
 /*
  * bi_subvol and bi_parent_subvol are only set for subvolume roots:
  */
 
-#define BCH_INODE_FIELDS()			\
+#define BCH_INODE_FIELDS_v2()			\
 	x(bi_atime,			96)	\
 	x(bi_ctime,			96)	\
 	x(bi_mtime,			96)	\
@@ -755,6 +772,32 @@ struct bch_inode_generation {
 	x(bi_subvol,			32)	\
 	x(bi_parent_subvol,		32)
 
+#define BCH_INODE_FIELDS_v3()			\
+	x(bi_atime,			96)	\
+	x(bi_ctime,			96)	\
+	x(bi_mtime,			96)	\
+	x(bi_otime,			96)	\
+	x(bi_uid,			32)	\
+	x(bi_gid,			32)	\
+	x(bi_nlink,			32)	\
+	x(bi_generation,		32)	\
+	x(bi_dev,			32)	\
+	x(bi_data_checksum,		8)	\
+	x(bi_compression,		8)	\
+	x(bi_project,			32)	\
+	x(bi_background_compression,	8)	\
+	x(bi_data_replicas,		8)	\
+	x(bi_promote_target,		16)	\
+	x(bi_foreground_target,		16)	\
+	x(bi_background_target,		16)	\
+	x(bi_erasure_code,		16)	\
+	x(bi_fields_set,		16)	\
+	x(bi_dir,			64)	\
+	x(bi_dir_offset,		64)	\
+	x(bi_subvol,			32)	\
+	x(bi_parent_subvol,		32)	\
+	x(bi_nocow,			8)
+
 /* subset of BCH_INODE_FIELDS */
 #define BCH_INODE_OPTS()			\
 	x(data_checksum,		8)	\
@@ -765,7 +808,8 @@ struct bch_inode_generation {
 	x(promote_target,		16)	\
 	x(foreground_target,		16)	\
 	x(background_target,		16)	\
-	x(erasure_code,			16)
+	x(erasure_code,			16)	\
+	x(nocow,			8)
 
 enum inode_opt_id {
 #define x(name, ...)				\
@@ -780,16 +824,16 @@ enum {
 	 * User flags (get/settable with FS_IOC_*FLAGS, correspond to FS_*_FL
 	 * flags)
 	 */
-	__BCH_INODE_SYNC	= 0,
-	__BCH_INODE_IMMUTABLE	= 1,
-	__BCH_INODE_APPEND	= 2,
-	__BCH_INODE_NODUMP	= 3,
-	__BCH_INODE_NOATIME	= 4,
+	__BCH_INODE_SYNC		= 0,
+	__BCH_INODE_IMMUTABLE		= 1,
+	__BCH_INODE_APPEND		= 2,
+	__BCH_INODE_NODUMP		= 3,
+	__BCH_INODE_NOATIME		= 4,
 
-	__BCH_INODE_I_SIZE_DIRTY= 5,
-	__BCH_INODE_I_SECTORS_DIRTY= 6,
-	__BCH_INODE_UNLINKED	= 7,
-	__BCH_INODE_BACKPTR_UNTRUSTED = 8,
+	__BCH_INODE_I_SIZE_DIRTY	= 5,
+	__BCH_INODE_I_SECTORS_DIRTY	= 6,
+	__BCH_INODE_UNLINKED		= 7,
+	__BCH_INODE_BACKPTR_UNTRUSTED	= 8,
 
 	/* bits 20+ reserved for packed fields below: */
 };
@@ -810,6 +854,13 @@ LE32_BITMASK(INODE_NEW_VARINT,	struct bch_inode, bi_flags, 31, 32);
 
 LE64_BITMASK(INODEv2_STR_HASH,	struct bch_inode_v2, bi_flags, 20, 24);
 LE64_BITMASK(INODEv2_NR_FIELDS,	struct bch_inode_v2, bi_flags, 24, 31);
+
+LE64_BITMASK(INODEv3_STR_HASH,	struct bch_inode_v3, bi_flags, 20, 24);
+LE64_BITMASK(INODEv3_NR_FIELDS,	struct bch_inode_v3, bi_flags, 24, 31);
+
+LE64_BITMASK(INODEv3_FIELDS_START,
+				struct bch_inode_v3, bi_flags, 31, 36);
+LE64_BITMASK(INODEv3_MODE,	struct bch_inode_v3, bi_flags, 36, 52);
 
 /* Dirents */
 
@@ -843,7 +894,7 @@ struct bch_dirent {
 	__u8			d_type;
 
 	__u8			d_name[];
-} __attribute__((packed, aligned(8)));
+} __packed __aligned(8);
 
 #define DT_SUBVOL	16
 #define BCH_DT_MAX	17
@@ -866,7 +917,7 @@ struct bch_xattr {
 	__u8			x_name_len;
 	__le16			x_val_len;
 	__u8			x_name[];
-} __attribute__((packed, aligned(8)));
+} __packed __aligned(8);
 
 /* Bucket/allocation information: */
 
@@ -875,7 +926,7 @@ struct bch_alloc {
 	__u8			fields;
 	__u8			gen;
 	__u8			data[];
-} __attribute__((packed, aligned(8)));
+} __packed __aligned(8);
 
 #define BCH_ALLOC_FIELDS_V1()			\
 	x(read_time,		16)		\
@@ -900,7 +951,7 @@ struct bch_alloc_v2 {
 	__u8			oldest_gen;
 	__u8			data_type;
 	__u8			data[];
-} __attribute__((packed, aligned(8)));
+} __packed __aligned(8);
 
 #define BCH_ALLOC_FIELDS_V2()			\
 	x(read_time,		64)		\
@@ -919,7 +970,7 @@ struct bch_alloc_v3 {
 	__u8			oldest_gen;
 	__u8			data_type;
 	__u8			data[];
-} __attribute__((packed, aligned(8)));
+} __packed __aligned(8);
 
 LE32_BITMASK(BCH_ALLOC_V3_NEED_DISCARD,struct bch_alloc_v3, flags,  0,  1)
 LE32_BITMASK(BCH_ALLOC_V3_NEED_INC_GEN,struct bch_alloc_v3, flags,  1,  2)
@@ -937,7 +988,7 @@ struct bch_alloc_v4 {
 	__u64			io_time[2];
 	__u32			stripe;
 	__u32			nr_external_backpointers;
-} __attribute__((packed, aligned(8)));
+} __packed __aligned(8);
 
 #define BCH_ALLOC_V4_U64s_V0	6
 #define BCH_ALLOC_V4_U64s	(sizeof(struct bch_alloc_v4) / sizeof(u64))
@@ -957,7 +1008,16 @@ struct bch_backpointer {
 	__u64			bucket_offset:40;
 	__u32			bucket_len;
 	struct bpos		pos;
-} __attribute__((packed, aligned(8)));
+} __packed __aligned(8);
+
+#define KEY_TYPE_BUCKET_GENS_BITS	8
+#define KEY_TYPE_BUCKET_GENS_NR		(1U << KEY_TYPE_BUCKET_GENS_BITS)
+#define KEY_TYPE_BUCKET_GENS_MASK	(KEY_TYPE_BUCKET_GENS_NR - 1)
+
+struct bch_bucket_gens {
+	struct bch_val		v;
+	u8			gens[KEY_TYPE_BUCKET_GENS_NR];
+} __packed __aligned(8);
 
 /* Quotas: */
 
@@ -982,7 +1042,7 @@ struct bch_quota_counter {
 struct bch_quota {
 	struct bch_val		v;
 	struct bch_quota_counter c[Q_COUNTERS];
-} __attribute__((packed, aligned(8)));
+} __packed __aligned(8);
 
 /* Erasure coding */
 
@@ -998,7 +1058,7 @@ struct bch_stripe {
 	__u8			pad;
 
 	struct bch_extent_ptr	ptrs[];
-} __attribute__((packed, aligned(8)));
+} __packed __aligned(8);
 
 /* Reflink: */
 
@@ -1015,14 +1075,14 @@ struct bch_reflink_p {
 	 */
 	__le32			front_pad;
 	__le32			back_pad;
-} __attribute__((packed, aligned(8)));
+} __packed __aligned(8);
 
 struct bch_reflink_v {
 	struct bch_val		v;
 	__le64			refcount;
 	union bch_extent_entry	start[0];
 	__u64			_data[0];
-} __attribute__((packed, aligned(8)));
+} __packed __aligned(8);
 
 struct bch_indirect_inline_data {
 	struct bch_val		v;
@@ -1079,7 +1139,7 @@ LE32_BITMASK(BCH_SNAPSHOT_SUBVOL,	struct bch_snapshot, flags,  1,  2)
 struct bch_lru {
 	struct bch_val		v;
 	__le64			idx;
-} __attribute__((packed, aligned(8)));
+} __packed __aligned(8);
 
 #define LRU_ID_STRIPES		(1U << 16)
 
@@ -1278,19 +1338,19 @@ struct bch_replicas_entry_v0 {
 	__u8			data_type;
 	__u8			nr_devs;
 	__u8			devs[];
-} __attribute__((packed));
+} __packed;
 
 struct bch_sb_field_replicas_v0 {
 	struct bch_sb_field	field;
 	struct bch_replicas_entry_v0 entries[];
-} __attribute__((packed, aligned(8)));
+} __packed __aligned(8);
 
 struct bch_replicas_entry {
 	__u8			data_type;
 	__u8			nr_devs;
 	__u8			nr_required;
 	__u8			devs[];
-} __attribute__((packed));
+} __packed;
 
 #define replicas_entry_bytes(_i)					\
 	(offsetof(typeof(*(_i)), devs) + (_i)->nr_devs)
@@ -1298,7 +1358,7 @@ struct bch_replicas_entry {
 struct bch_sb_field_replicas {
 	struct bch_sb_field	field;
 	struct bch_replicas_entry entries[0];
-} __attribute__((packed, aligned(8)));
+} __packed __aligned(8);
 
 /* BCH_SB_FIELD_quota: */
 
@@ -1315,7 +1375,7 @@ struct bch_sb_quota_type {
 struct bch_sb_field_quota {
 	struct bch_sb_field		field;
 	struct bch_sb_quota_type	q[QTYP_NR];
-} __attribute__((packed, aligned(8)));
+} __packed __aligned(8);
 
 /* BCH_SB_FIELD_disk_groups: */
 
@@ -1324,7 +1384,7 @@ struct bch_sb_field_quota {
 struct bch_disk_group {
 	__u8			label[BCH_SB_LABEL_SIZE];
 	__le64			flags[2];
-} __attribute__((packed, aligned(8)));
+} __packed __aligned(8);
 
 LE64_BITMASK(BCH_GROUP_DELETED,		struct bch_disk_group, flags[0], 0,  1)
 LE64_BITMASK(BCH_GROUP_DATA_ALLOWED,	struct bch_disk_group, flags[0], 1,  6)
@@ -1333,16 +1393,86 @@ LE64_BITMASK(BCH_GROUP_PARENT,		struct bch_disk_group, flags[0], 6, 24)
 struct bch_sb_field_disk_groups {
 	struct bch_sb_field	field;
 	struct bch_disk_group	entries[0];
-} __attribute__((packed, aligned(8)));
+} __packed __aligned(8);
 
 /* BCH_SB_FIELD_counters */
 
-#define BCH_PERSISTENT_COUNTERS()			\
-	x(io_read,		0)			\
-	x(io_write,		1)			\
-	x(io_move,		2)			\
-	x(bucket_invalidate,	3)			\
-	x(bucket_discard,	4)
+#define BCH_PERSISTENT_COUNTERS()				\
+	x(io_read,					0)	\
+	x(io_write,					1)	\
+	x(io_move,					2)	\
+	x(bucket_invalidate,				3)	\
+	x(bucket_discard,				4)	\
+	x(bucket_alloc,					5)	\
+	x(bucket_alloc_fail,				6)	\
+	x(btree_cache_scan,				7)	\
+	x(btree_cache_reap,				8)	\
+	x(btree_cache_cannibalize,			9)	\
+	x(btree_cache_cannibalize_lock,			10)	\
+	x(btree_cache_cannibalize_lock_fail,		11)	\
+	x(btree_cache_cannibalize_unlock,		12)	\
+	x(btree_node_write,				13)	\
+	x(btree_node_read,				14)	\
+	x(btree_node_compact,				15)	\
+	x(btree_node_merge,				16)	\
+	x(btree_node_split,				17)	\
+	x(btree_node_rewrite,				18)	\
+	x(btree_node_alloc,				19)	\
+	x(btree_node_free,				20)	\
+	x(btree_node_set_root,				21)	\
+	x(btree_path_relock_fail,			22)	\
+	x(btree_path_upgrade_fail,			23)	\
+	x(btree_reserve_get_fail,			24)	\
+	x(journal_entry_full,				25)	\
+	x(journal_full,					26)	\
+	x(journal_reclaim_finish,			27)	\
+	x(journal_reclaim_start,			28)	\
+	x(journal_write,				29)	\
+	x(read_promote,					30)	\
+	x(read_bounce,					31)	\
+	x(read_split,					33)	\
+	x(read_retry,					32)	\
+	x(read_reuse_race,				34)	\
+	x(move_extent_read,				35)	\
+	x(move_extent_write,				36)	\
+	x(move_extent_finish,				37)	\
+	x(move_extent_race,				38)	\
+	x(move_extent_alloc_mem_fail,			39)	\
+	x(copygc,					40)	\
+	x(copygc_wait,					41)	\
+	x(gc_gens_end,					42)	\
+	x(gc_gens_start,				43)	\
+	x(trans_blocked_journal_reclaim,		44)	\
+	x(trans_restart_btree_node_reused,		45)	\
+	x(trans_restart_btree_node_split,		46)	\
+	x(trans_restart_fault_inject,			47)	\
+	x(trans_restart_iter_upgrade,			48)	\
+	x(trans_restart_journal_preres_get,		49)	\
+	x(trans_restart_journal_reclaim,		50)	\
+	x(trans_restart_journal_res_get,		51)	\
+	x(trans_restart_key_cache_key_realloced,	52)	\
+	x(trans_restart_key_cache_raced,		53)	\
+	x(trans_restart_mark_replicas,			54)	\
+	x(trans_restart_mem_realloced,			55)	\
+	x(trans_restart_memory_allocation_failure,	56)	\
+	x(trans_restart_relock,				57)	\
+	x(trans_restart_relock_after_fill,		58)	\
+	x(trans_restart_relock_key_cache_fill,		59)	\
+	x(trans_restart_relock_next_node,		60)	\
+	x(trans_restart_relock_parent_for_fill,		61)	\
+	x(trans_restart_relock_path,			62)	\
+	x(trans_restart_relock_path_intent,		63)	\
+	x(trans_restart_too_many_iters,			64)	\
+	x(trans_restart_traverse,			65)	\
+	x(trans_restart_upgrade,			66)	\
+	x(trans_restart_would_deadlock,			67)	\
+	x(trans_restart_would_deadlock_write,		68)	\
+	x(trans_restart_injected,			69)	\
+	x(trans_restart_key_cache_upgrade,		70)	\
+	x(trans_traverse_all,				71)	\
+	x(transaction_commit,				72)	\
+	x(write_super,					73)	\
+	x(trans_restart_would_deadlock_recursion_limit,	74)
 
 enum bch_persistent_counters {
 #define x(t, n, ...) BCH_COUNTER_##t,
@@ -1424,7 +1554,11 @@ struct bch_sb_field_journal_seq_blacklist {
 	x(freespace,			19)		\
 	x(alloc_v4,			20)		\
 	x(new_data_types,		21)		\
-	x(backpointers,			22)
+	x(backpointers,			22)		\
+	x(inode_v3,			23)		\
+	x(unwritten_extents,		24)		\
+	x(bucket_gens,			25)		\
+	x(lru_v2,			26)
 
 enum bcachefs_metadata_version {
 	bcachefs_metadata_version_min = 9,
@@ -1446,7 +1580,7 @@ struct bch_sb_layout {
 	__u8			nr_superblocks;
 	__u8			pad[5];
 	__le64			sb_offset[61];
-} __attribute__((packed, aligned(8)));
+} __packed __aligned(8);
 
 #define BCH_SB_LAYOUT_SECTOR	7
 
@@ -1456,7 +1590,7 @@ struct bch_sb_layout {
  * @version_min	- Oldest metadata version this filesystem contains; so we can
  *		  safely drop compatibility code and refuse to mount filesystems
  *		  we'd need it for
- * @magic	- identifies as a bcachefs superblock (BCACHE_MAGIC)
+ * @magic	- identifies as a bcachefs superblock (BCHFS_MAGIC)
  * @seq		- incremented each time superblock is written
  * @uuid	- used for generating various magic numbers and identifying
  *                member devices, never changes
@@ -1497,7 +1631,7 @@ struct bch_sb {
 		struct bch_sb_field start[0];
 		__le64		_data[0];
 	};
-} __attribute__((packed, aligned(8)));
+} __packed __aligned(8);
 
 /*
  * Flags:
@@ -1573,6 +1707,7 @@ LE64_BITMASK(BCH_SB_JOURNAL_FLUSH_DISABLED,struct bch_sb, flags[3], 62, 63);
 LE64_BITMASK(BCH_SB_JOURNAL_RECLAIM_DELAY,struct bch_sb, flags[4], 0, 32);
 /* Obsolete, always enabled: */
 LE64_BITMASK(BCH_SB_JOURNAL_TRANSACTION_NAMES,struct bch_sb, flags[4], 32, 33);
+LE64_BITMASK(BCH_SB_NOCOW,		struct bch_sb, flags[4], 33, 34);
 
 /*
  * Features:
@@ -1771,6 +1906,9 @@ enum bch_compression_opts {
 #define BCACHE_MAGIC							\
 	UUID_LE(0xf67385c6, 0x1a4e, 0xca45,				\
 		0x82, 0x65, 0xf5, 0x7f, 0x48, 0xba, 0x6d, 0x81)
+#define BCHFS_MAGIC							\
+	UUID_LE(0xf67385c6, 0xce66, 0xa990,				\
+		0xd9, 0x6a, 0x60, 0xcf, 0x80, 0x3d, 0xf7, 0xef)
 
 #define BCACHEFS_STATFS_MAGIC		0xca451a4e
 
@@ -1780,6 +1918,7 @@ enum bch_compression_opts {
 static inline __le64 __bch2_sb_magic(struct bch_sb *sb)
 {
 	__le64 ret;
+
 	memcpy(&ret, &sb->uuid, sizeof(ret));
 	return ret;
 }
@@ -1854,26 +1993,26 @@ enum {
 struct jset_entry_usage {
 	struct jset_entry	entry;
 	__le64			v;
-} __attribute__((packed));
+} __packed;
 
 struct jset_entry_data_usage {
 	struct jset_entry	entry;
 	__le64			v;
 	struct bch_replicas_entry r;
-} __attribute__((packed));
+} __packed;
 
 struct jset_entry_clock {
 	struct jset_entry	entry;
 	__u8			rw;
 	__u8			pad[7];
 	__le64			time;
-} __attribute__((packed));
+} __packed;
 
 struct jset_entry_dev_usage_type {
 	__le64			buckets;
 	__le64			sectors;
 	__le64			fragmented;
-} __attribute__((packed));
+} __packed;
 
 struct jset_entry_dev_usage {
 	struct jset_entry	entry;
@@ -1884,7 +2023,7 @@ struct jset_entry_dev_usage {
 	__le64			_buckets_unavailable; /* No longer used */
 
 	struct jset_entry_dev_usage_type d[];
-} __attribute__((packed));
+} __packed;
 
 static inline unsigned jset_entry_dev_usage_nr_types(struct jset_entry_dev_usage *u)
 {
@@ -1895,7 +2034,7 @@ static inline unsigned jset_entry_dev_usage_nr_types(struct jset_entry_dev_usage
 struct jset_entry_log {
 	struct jset_entry	entry;
 	u8			d[];
-} __attribute__((packed));
+} __packed;
 
 /*
  * On disk format for a journal entry:
@@ -1930,7 +2069,7 @@ struct jset {
 		struct jset_entry start[0];
 		__u64		_data[0];
 	};
-} __attribute__((packed, aligned(8)));
+} __packed __aligned(8);
 
 LE32_BITMASK(JSET_CSUM_TYPE,	struct jset, flags, 0, 4);
 LE32_BITMASK(JSET_BIG_ENDIAN,	struct jset, flags, 4, 5);
@@ -1941,20 +2080,21 @@ LE32_BITMASK(JSET_NO_FLUSH,	struct jset, flags, 5, 6);
 /* Btree: */
 
 #define BCH_BTREE_IDS()				\
-	x(extents,	0)			\
-	x(inodes,	1)			\
-	x(dirents,	2)			\
-	x(xattrs,	3)			\
-	x(alloc,	4)			\
-	x(quotas,	5)			\
-	x(stripes,	6)			\
-	x(reflink,	7)			\
-	x(subvolumes,	8)			\
-	x(snapshots,	9)			\
-	x(lru,		10)			\
-	x(freespace,	11)			\
-	x(need_discard,	12)			\
-	x(backpointers,	13)
+	x(extents,		0)		\
+	x(inodes,		1)		\
+	x(dirents,		2)		\
+	x(xattrs,		3)		\
+	x(alloc,		4)		\
+	x(quotas,		5)		\
+	x(stripes,		6)		\
+	x(reflink,		7)		\
+	x(subvolumes,		8)		\
+	x(snapshots,		9)		\
+	x(lru,			10)		\
+	x(freespace,		11)		\
+	x(need_discard,		12)		\
+	x(backpointers,		13)		\
+	x(bucket_gens,		14)
 
 enum btree_id {
 #define x(kwd, val) BTREE_ID_##kwd = val,
@@ -1993,7 +2133,7 @@ struct bset {
 		struct bkey_packed start[0];
 		__u64		_data[0];
 	};
-} __attribute__((packed, aligned(8)));
+} __packed __aligned(8);
 
 LE32_BITMASK(BSET_CSUM_TYPE,	struct bset, flags, 0, 4);
 
@@ -2026,7 +2166,7 @@ struct btree_node {
 
 	};
 	};
-} __attribute__((packed, aligned(8)));
+} __packed __aligned(8);
 
 LE64_BITMASK(BTREE_NODE_ID,	struct btree_node, flags,  0,  4);
 LE64_BITMASK(BTREE_NODE_LEVEL,	struct btree_node, flags,  4,  8);
@@ -2047,6 +2187,6 @@ struct btree_node_entry {
 
 	};
 	};
-} __attribute__((packed, aligned(8)));
+} __packed __aligned(8);
 
 #endif /* _BCACHEFS_FORMAT_H */

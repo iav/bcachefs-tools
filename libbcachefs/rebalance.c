@@ -6,6 +6,7 @@
 #include "buckets.h"
 #include "clock.h"
 #include "disk_groups.h"
+#include "errcode.h"
 #include "extents.h"
 #include "io.h"
 #include "move.h"
@@ -188,7 +189,7 @@ static int bch2_rebalance_thread(void *arg)
 	prev_start	= jiffies;
 	prev_cputime	= curr_cputime();
 
-	bch_move_stats_init(&move_stats, "rebalance");
+	bch2_move_stats_init(&move_stats, "rebalance");
 	while (!kthread_wait_freezable(r->enabled)) {
 		cond_resched();
 
@@ -267,7 +268,8 @@ void bch2_rebalance_work_to_text(struct printbuf *out, struct bch_fs *c)
 	struct bch_fs_rebalance *r = &c->rebalance;
 	struct rebalance_work w = rebalance_work(c);
 
-	out->tabstops[0] = 20;
+	if (!out->nr_tabstops)
+		printbuf_tabstop_push(out, 20);
 
 	prt_printf(out, "fullest_dev (%i):", w.dev_most_full_idx);
 	prt_tab(out);
@@ -331,6 +333,7 @@ void bch2_rebalance_stop(struct bch_fs *c)
 int bch2_rebalance_start(struct bch_fs *c)
 {
 	struct task_struct *p;
+	int ret;
 
 	if (c->rebalance.thread)
 		return 0;
@@ -339,9 +342,10 @@ int bch2_rebalance_start(struct bch_fs *c)
 		return 0;
 
 	p = kthread_create(bch2_rebalance_thread, c, "bch-rebalance/%s", c->name);
-	if (IS_ERR(p)) {
-		bch_err(c, "error creating rebalance thread: %li", PTR_ERR(p));
-		return PTR_ERR(p);
+	ret = PTR_ERR_OR_ZERO(p);
+	if (ret) {
+		bch_err(c, "error creating rebalance thread: %s", bch2_err_str(ret));
+		return ret;
 	}
 
 	get_task_struct(p);

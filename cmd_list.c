@@ -67,7 +67,7 @@ static void list_btree_formats(struct bch_fs *c, enum btree_id btree_id, unsigne
 	bch2_trans_iter_exit(&trans, &iter);
 
 	if (ret)
-		die("error %s walking btree nodes", strerror(-ret));
+		die("error %s walking btree nodes", bch2_err_str(ret));
 
 	bch2_trans_exit(&trans);
 	printbuf_exit(&buf);
@@ -96,7 +96,7 @@ static void list_nodes(struct bch_fs *c, enum btree_id btree_id, unsigned level,
 	bch2_trans_iter_exit(&trans, &iter);
 
 	if (ret)
-		die("error %s walking btree nodes", strerror(-ret));
+		die("error %s walking btree nodes", bch2_err_str(ret));
 
 	bch2_trans_exit(&trans);
 	printbuf_exit(&buf);
@@ -109,6 +109,7 @@ static void print_node_ondisk(struct bch_fs *c, struct btree *b)
 	struct bch_dev *ca;
 	struct bio *bio;
 	unsigned offset = 0;
+	int ret;
 
 	if (bch2_bkey_pick_read_device(c, bkey_i_to_s_c(&b->key), NULL, &pick) <= 0) {
 		printf("error getting device to read from\n");
@@ -121,7 +122,7 @@ static void print_node_ondisk(struct bch_fs *c, struct btree *b)
 		return;
 	}
 
-	n_ondisk = malloc(btree_bytes(c));
+	n_ondisk = aligned_alloc(block_bytes(c), btree_bytes(c));
 
 	bio = bio_alloc_bioset(ca->disk_sb.bdev,
 			       buf_pages(n_ondisk, btree_bytes(c)),
@@ -131,7 +132,9 @@ static void print_node_ondisk(struct bch_fs *c, struct btree *b)
 	bio->bi_iter.bi_sector	= pick.ptr.offset;
 	bch2_bio_map(bio, n_ondisk, btree_bytes(c));
 
-	submit_bio_wait(bio);
+	ret = submit_bio_wait(bio);
+	if (ret)
+		die("error reading btree node: %i", ret);
 
 	bio_put(bio);
 	percpu_ref_put(&ca->io_ref);
@@ -147,7 +150,8 @@ static void print_node_ondisk(struct bch_fs *c, struct btree *b)
 			i = &n_ondisk->keys;
 
 			if (!bch2_checksum_type_valid(c, BSET_CSUM_TYPE(i)))
-				die("unknown checksum type");
+				die("unknown checksum type at offset %u: %llu",
+				    offset, BSET_CSUM_TYPE(i));
 
 			nonce = btree_nonce(i, offset << 9);
 			csum = csum_vstruct(c, BSET_CSUM_TYPE(i), nonce, n_ondisk);
@@ -167,7 +171,8 @@ static void print_node_ondisk(struct bch_fs *c, struct btree *b)
 				break;
 
 			if (!bch2_checksum_type_valid(c, BSET_CSUM_TYPE(i)))
-				die("unknown checksum type");
+				die("unknown checksum type at offset %u: %llu",
+				    offset, BSET_CSUM_TYPE(i));
 
 			nonce = btree_nonce(i, offset << 9);
 			csum = csum_vstruct(c, BSET_CSUM_TYPE(i), nonce, bne);
@@ -190,8 +195,10 @@ static void print_node_ondisk(struct bch_fs *c, struct btree *b)
 			struct bkey u;
 			struct printbuf buf = PRINTBUF;
 
+			printbuf_indent_add(&buf, 4);
+
 			bch2_bkey_val_to_text(&buf, c, bkey_disassemble(b, k, &u));
-			fprintf(stdout, "    %s\n", buf.buf);
+			fprintf(stdout, "%s\n", buf.buf);
 
 			printbuf_exit(&buf);
 		}
@@ -225,7 +232,7 @@ static void list_nodes_ondisk(struct bch_fs *c, enum btree_id btree_id, unsigned
 	bch2_trans_iter_exit(&trans, &iter);
 
 	if (ret)
-		die("error %s walking btree nodes", strerror(-ret));
+		die("error %s walking btree nodes", bch2_err_str(ret));
 
 	bch2_trans_exit(&trans);
 	printbuf_exit(&buf);
@@ -263,7 +270,7 @@ static void list_nodes_keys(struct bch_fs *c, enum btree_id btree_id, unsigned l
 	bch2_trans_iter_exit(&trans, &iter);
 
 	if (ret)
-		die("error %s walking btree nodes", strerror(-ret));
+		die("error %s walking btree nodes", bch2_err_str(ret));
 
 	bch2_trans_exit(&trans);
 	printbuf_exit(&buf);
@@ -369,7 +376,7 @@ int cmd_list(int argc, char *argv[])
 
 	struct bch_fs *c = bch2_fs_open(argv, argc, opts);
 	if (IS_ERR(c))
-		die("error opening %s: %s", argv[0], strerror(-PTR_ERR(c)));
+		die("error opening %s: %s", argv[0], bch2_err_str(PTR_ERR(c)));
 
 
 	for (btree_id = btree_id_start;

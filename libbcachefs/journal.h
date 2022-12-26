@@ -29,8 +29,8 @@
  *
  * Synchronous updates are specified by passing a closure (@flush_cl) to
  * bch2_btree_insert() or bch_btree_insert_node(), which then pass that parameter
- * down to the journalling code. That closure will will wait on the journal
- * write to complete (via closure_wait()).
+ * down to the journalling code. That closure will wait on the journal write to
+ * complete (via closure_wait()).
  *
  * If the index update wasn't synchronous, the journal entry will be
  * written out after 10 ms have elapsed, by default (the delay_ms field
@@ -110,6 +110,7 @@
  */
 
 #include <linux/hash.h>
+#include <linux/prefetch.h>
 
 #include "journal_types.h"
 
@@ -304,15 +305,26 @@ static inline int journal_res_get_fast(struct journal *j,
 {
 	union journal_res_state old, new;
 	u64 v = atomic64_read(&j->reservations.counter);
+	unsigned u64s, offset;
 
 	do {
 		old.v = new.v = v;
 
 		/*
+		 * Round up the end of the journal reservation to the next
+		 * cacheline boundary:
+		 */
+		u64s = res->u64s;
+		offset = sizeof(struct jset) / sizeof(u64) +
+			  new.cur_entry_offset + u64s;
+		u64s += ((offset - 1) & ((SMP_CACHE_BYTES / sizeof(u64)) - 1)) + 1;
+
+
+		/*
 		 * Check if there is still room in the current journal
 		 * entry:
 		 */
-		if (new.cur_entry_offset + res->u64s > j->cur_entry_u64s)
+		if (new.cur_entry_offset + u64s > j->cur_entry_u64s)
 			return 0;
 
 		EBUG_ON(!journal_state_count(new, new.idx));
@@ -320,7 +332,7 @@ static inline int journal_res_get_fast(struct journal *j,
 		if ((flags & JOURNAL_WATERMARK_MASK) < j->watermark)
 			return 0;
 
-		new.cur_entry_offset += res->u64s;
+		new.cur_entry_offset += u64s;
 		journal_state_inc(&new);
 
 		/*
@@ -337,8 +349,15 @@ static inline int journal_res_get_fast(struct journal *j,
 
 	res->ref	= true;
 	res->idx	= old.idx;
+	res->u64s	= u64s;
 	res->offset	= old.cur_entry_offset;
 	res->seq	= le64_to_cpu(j->buf[old.idx].data->seq);
+
+	offset = res->offset;
+	while (offset < res->offset + res->u64s) {
+		prefetchw(vstruct_idx(j->buf[res->idx].data, offset));
+		offset += SMP_CACHE_BYTES / sizeof(u64);
+	}
 	return 1;
 }
 
@@ -460,7 +479,7 @@ static inline int bch2_journal_preres_get(struct journal *j,
 		return 0;
 
 	if (flags & JOURNAL_RES_GET_NONBLOCK)
-		return -EAGAIN;
+		return -BCH_ERR_journal_preres_get_blocked;
 
 	return __bch2_journal_preres_get(j, res, new_u64s, flags);
 }
@@ -478,7 +497,6 @@ int bch2_journal_flush_seq(struct journal *, u64);
 int bch2_journal_flush(struct journal *);
 bool bch2_journal_noflush_seq(struct journal *, u64);
 int bch2_journal_meta(struct journal *);
-int bch2_journal_log_msg(struct journal *, const char *, ...);
 
 void bch2_journal_halt(struct journal *);
 

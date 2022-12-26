@@ -24,6 +24,7 @@
 #include "libbcachefs.h"
 #include "crypto.h"
 #include "libbcachefs/darray.h"
+#include "libbcachefs/errcode.h"
 #include "libbcachefs/opts.h"
 #include "libbcachefs/super-io.h"
 #include "libbcachefs/util.h"
@@ -218,6 +219,9 @@ int cmd_format(int argc, char *argv[])
 			break;
 		}
 
+	if (opts.version != bcachefs_metadata_version_current)
+		initialize = false;
+
 	if (!devices.nr)
 		die("Please supply a device");
 
@@ -270,7 +274,7 @@ int cmd_format(int argc, char *argv[])
 						mount_opts);
 		if (IS_ERR(c))
 			die("error opening %s: %s", device_paths.data[0],
-			    strerror(-PTR_ERR(c)));
+			    bch2_err_str(PTR_ERR(c)));
 
 		bch2_fs_stop(c);
 	}
@@ -336,7 +340,7 @@ int cmd_show_super(int argc, char *argv[])
 	struct bch_sb_handle sb;
 	int ret = bch2_read_super(dev, &opts, &sb);
 	if (ret)
-		die("Error opening %s: %s", dev, strerror(-ret));
+		die("Error opening %s: %s", dev, bch2_err_str(ret));
 
 	struct printbuf buf = PRINTBUF;
 

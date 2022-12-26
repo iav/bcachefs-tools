@@ -32,6 +32,10 @@
  * Since no equivalent yet exists for GFP_ATOMIC/GFP_NOWAIT, memory allocations
  * will be done with GFP_NOWAIT if printbuf->atomic is nonzero.
  *
+ * It's allowed to grab the output buffer and free it later with kfree() instead
+ * of using printbuf_exit(), if the user just needs a heap allocated string at
+ * the end.
+ *
  * Memory allocation failures: We don't return errors directly, because on
  * memory allocation failure we usually don't want to bail out and unwind - we
  * want to print what we've got, on a best-effort basis. But code that does want
@@ -67,6 +71,8 @@ enum printbuf_si {
 	PRINTBUF_UNITS_10,	/* use powers of 10^3 (standard SI) */
 };
 
+#define PRINTBUF_INLINE_TABSTOPS	4
+
 struct printbuf {
 	char			*buf;
 	unsigned		size;
@@ -82,19 +88,34 @@ struct printbuf {
 	bool			heap_allocated:1;
 	enum printbuf_si	si_units:1;
 	bool			human_readable_units:1;
-	u8			tabstop;
-	u8			tabstops[4];
+	bool			has_indent_or_tabstops:1;
+	bool			suppress_indent_tabstop_handling:1;
+	u8			nr_tabstops;
+
+	/*
+	 * Do not modify directly: use printbuf_tabstop_add(),
+	 * printbuf_tabstop_get()
+	 */
+	u8			cur_tabstop;
+	u8			_tabstops[PRINTBUF_INLINE_TABSTOPS];
 };
 
 int printbuf_make_room(struct printbuf *, unsigned);
 const char *printbuf_str(const struct printbuf *);
 void printbuf_exit(struct printbuf *);
 
-void prt_newline(struct printbuf *);
+void printbuf_tabstops_reset(struct printbuf *);
+void printbuf_tabstop_pop(struct printbuf *);
+int printbuf_tabstop_push(struct printbuf *, unsigned);
+
 void printbuf_indent_add(struct printbuf *, unsigned);
 void printbuf_indent_sub(struct printbuf *, unsigned);
+
+void prt_newline(struct printbuf *);
 void prt_tab(struct printbuf *);
 void prt_tab_rjust(struct printbuf *);
+
+void prt_bytes_indented(struct printbuf *, const char *, unsigned);
 void prt_human_readable_u64(struct printbuf *, u64);
 void prt_human_readable_s64(struct printbuf *, s64);
 void prt_units_u64(struct printbuf *, u64);
@@ -129,7 +150,7 @@ static inline unsigned printbuf_remaining(struct printbuf *out)
 
 static inline unsigned printbuf_written(struct printbuf *out)
 {
-	return min(out->pos, out->size);
+	return out->size ? min(out->pos, out->size - 1) : 0;
 }
 
 /*
@@ -148,21 +169,6 @@ static inline void printbuf_nul_terminate(struct printbuf *out)
 		out->buf[out->pos] = 0;
 	else if (out->size)
 		out->buf[out->size - 1] = 0;
-}
-
-static inline void __prt_chars_reserved(struct printbuf *out, char c, unsigned n)
-{
-	memset(out->buf + out->pos,
-	       c,
-	       min(n, printbuf_remaining(out)));
-	out->pos += n;
-}
-
-static inline void prt_chars(struct printbuf *out, char c, unsigned n)
-{
-	printbuf_make_room(out, n);
-	__prt_chars_reserved(out, c, n);
-	printbuf_nul_terminate(out);
 }
 
 /* Doesn't call printbuf_make_room(), doesn't nul terminate: */
@@ -186,20 +192,45 @@ static inline void prt_char(struct printbuf *out, char c)
 	printbuf_nul_terminate(out);
 }
 
-static inline void prt_bytes(struct printbuf *out, const void *b, unsigned n)
+static inline void __prt_chars_reserved(struct printbuf *out, char c, unsigned n)
+{
+	unsigned i, can_print = min(n, printbuf_remaining(out));
+
+	for (i = 0; i < can_print; i++)
+		out->buf[out->pos++] = c;
+	out->pos += n - can_print;
+}
+
+static inline void prt_chars(struct printbuf *out, char c, unsigned n)
 {
 	printbuf_make_room(out, n);
+	__prt_chars_reserved(out, c, n);
+	printbuf_nul_terminate(out);
+}
 
-	memcpy(out->buf + out->pos,
-	       b,
-	       min(n, printbuf_remaining(out)));
-	out->pos += n;
+static inline void prt_bytes(struct printbuf *out, const void *b, unsigned n)
+{
+	unsigned i, can_print;
+
+	printbuf_make_room(out, n);
+
+	can_print = min(n, printbuf_remaining(out));
+
+	for (i = 0; i < can_print; i++)
+		out->buf[out->pos++] = ((char *) b)[i];
+	out->pos += n - can_print;
+
 	printbuf_nul_terminate(out);
 }
 
 static inline void prt_str(struct printbuf *out, const char *str)
 {
 	prt_bytes(out, str, strlen(str));
+}
+
+static inline void prt_str_indented(struct printbuf *out, const char *str)
+{
+	prt_bytes_indented(out, str, strlen(str));
 }
 
 static inline void prt_hex_byte(struct printbuf *out, u8 byte)
@@ -226,7 +257,8 @@ static inline void printbuf_reset(struct printbuf *buf)
 	buf->pos		= 0;
 	buf->allocation_failure	= 0;
 	buf->indent		= 0;
-	buf->tabstop		= 0;
+	buf->nr_tabstops	= 0;
+	buf->cur_tabstop	= 0;
 }
 
 /**
@@ -244,5 +276,31 @@ static inline void printbuf_atomic_dec(struct printbuf *buf)
 {
 	buf->atomic--;
 }
+
+/*
+ * This is used for the %pf(%p) sprintf format extension, where we pass a pretty
+ * printer and arguments to the pretty-printer to sprintf
+ *
+ * Instead of passing a pretty-printer function to sprintf directly, we pass it
+ * a pointer to a struct call_pp, so that sprintf can check that the magic
+ * number is present, which in turn ensures that the CALL_PP() macro has been
+ * used in order to typecheck the arguments to the pretty printer function
+ *
+ * Example usage:
+ *   sprintf("%pf(%p)", CALL_PP(prt_bdev, bdev));
+ */
+struct call_pp {
+	unsigned long	magic;
+	void		*fn;
+};
+
+#define PP_TYPECHECK(fn, ...)					\
+	({ while (0) fn((struct printbuf *) NULL, ##__VA_ARGS__); })
+
+#define CALL_PP_MAGIC		(unsigned long) 0xce0b92d22f6b6be4
+
+#define CALL_PP(fn, ...)					\
+	(PP_TYPECHECK(fn, ##__VA_ARGS__),			\
+	 &((struct call_pp) { CALL_PP_MAGIC, fn })), ##__VA_ARGS__
 
 #endif /* _LINUX_PRINTBUF_H */

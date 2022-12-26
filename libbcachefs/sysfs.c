@@ -27,6 +27,7 @@
 #include "journal.h"
 #include "keylist.h"
 #include "move.h"
+#include "nocow_locking.h"
 #include "opts.h"
 #include "rebalance.h"
 #include "replicas.h"
@@ -41,14 +42,14 @@
 #include "util.h"
 
 #define SYSFS_OPS(type)							\
-const struct sysfs_ops type ## _sysfs_ops = {					\
+const struct sysfs_ops type ## _sysfs_ops = {				\
 	.show	= type ## _show,					\
 	.store	= type ## _store					\
 }
 
 #define SHOW(fn)							\
 static ssize_t fn ## _to_text(struct printbuf *,			\
-			      struct kobject *, struct attribute *);\
+			      struct kobject *, struct attribute *);	\
 									\
 static ssize_t fn ## _show(struct kobject *kobj, struct attribute *attr,\
 			   char *buf)					\
@@ -67,23 +68,32 @@ static ssize_t fn ## _show(struct kobject *kobj, struct attribute *attr,\
 		memcpy(buf, out.buf, ret);				\
 	}								\
 	printbuf_exit(&out);						\
-	return ret;							\
+	return bch2_err_class(ret);					\
 }									\
 									\
 static ssize_t fn ## _to_text(struct printbuf *out, struct kobject *kobj,\
 			      struct attribute *attr)
 
 #define STORE(fn)							\
+static ssize_t fn ## _store_inner(struct kobject *, struct attribute *,\
+			    const char *, size_t);			\
+									\
 static ssize_t fn ## _store(struct kobject *kobj, struct attribute *attr,\
 			    const char *buf, size_t size)		\
+{									\
+	return bch2_err_class(fn##_store_inner(kobj, attr, buf, size));	\
+}									\
+									\
+static ssize_t fn ## _store_inner(struct kobject *kobj, struct attribute *attr,\
+				  const char *buf, size_t size)
 
 #define __sysfs_attribute(_name, _mode)					\
 	static struct attribute sysfs_##_name =				\
 		{ .name = #_name, .mode = _mode }
 
-#define write_attribute(n)	__sysfs_attribute(n, S_IWUSR)
-#define read_attribute(n)	__sysfs_attribute(n, S_IRUGO)
-#define rw_attribute(n)		__sysfs_attribute(n, S_IRUGO|S_IWUSR)
+#define write_attribute(n)	__sysfs_attribute(n, 0200)
+#define read_attribute(n)	__sysfs_attribute(n, 0444)
+#define rw_attribute(n)		__sysfs_attribute(n, 0644)
 
 #define sysfs_printf(file, fmt, ...)					\
 do {									\
@@ -157,6 +167,7 @@ write_attribute(trigger_gc);
 write_attribute(trigger_discards);
 write_attribute(trigger_invalidates);
 write_attribute(prune_cache);
+write_attribute(btree_wakeup);
 rw_attribute(btree_gc_periodic);
 rw_attribute(gc_gens_pos);
 
@@ -165,7 +176,7 @@ read_attribute(minor);
 read_attribute(bucket_size);
 read_attribute(first_bucket);
 read_attribute(nbuckets);
-read_attribute(durability);
+rw_attribute(durability);
 read_attribute(iodone);
 
 read_attribute(io_latency_read);
@@ -174,7 +185,7 @@ read_attribute(io_latency_stats_read);
 read_attribute(io_latency_stats_write);
 read_attribute(congested);
 
-read_attribute(btree_avg_write_size);
+read_attribute(btree_write_stats);
 
 read_attribute(btree_cache_size);
 read_attribute(compression_stats);
@@ -184,16 +195,12 @@ read_attribute(btree_cache);
 read_attribute(btree_key_cache);
 read_attribute(stripes_heap);
 read_attribute(open_buckets);
+read_attribute(nocow_lock_table);
 
 read_attribute(internal_uuid);
 
 read_attribute(has_data);
 read_attribute(alloc_debug);
-
-read_attribute(read_realloc_races);
-read_attribute(extent_migrate_done);
-read_attribute(extent_migrate_raced);
-read_attribute(bucket_alloc_fail);
 
 #define x(t, n, ...) read_attribute(t);
 BCH_PERSISTENT_COUNTERS()
@@ -223,13 +230,13 @@ write_attribute(perf_test);
 
 #define x(_name)						\
 	static struct attribute sysfs_time_stat_##_name =		\
-		{ .name = #_name, .mode = S_IRUGO };
+		{ .name = #_name, .mode = 0444 };
 	BCH_TIME_STATS()
 #undef x
 
 static struct attribute sysfs_state_rw = {
 	.name = "state",
-	.mode = S_IRUGO
+	.mode =  0444,
 };
 
 static size_t bch2_btree_cache_size(struct bch_fs *c)
@@ -243,14 +250,6 @@ static size_t bch2_btree_cache_size(struct bch_fs *c)
 
 	mutex_unlock(&c->btree_cache.lock);
 	return ret;
-}
-
-static size_t bch2_btree_avg_write_size(struct bch_fs *c)
-{
-	u64 nr = atomic64_read(&c->btree_writes_nr);
-	u64 sectors = atomic64_read(&c->btree_writes_sectors);
-
-	return nr ? div64_u64(sectors, nr) : 0;
 }
 
 static long data_progress_to_text(struct printbuf *out, struct bch_fs *c)
@@ -293,7 +292,7 @@ static int bch2_compression_stats_to_text(struct printbuf *out, struct bch_fs *c
 	bch2_trans_init(&trans, c, 0, 0);
 
 	for (id = 0; id < BTREE_ID_NR; id++) {
-		if (!((1U << id) & BTREE_ID_HAS_PTRS))
+		if (!btree_type_has_ptrs(id))
 			continue;
 
 		for_each_btree_key(&trans, iter, id, POS_MIN,
@@ -368,6 +367,21 @@ static void bch2_gc_gens_pos_to_text(struct printbuf *out, struct bch_fs *c)
 	prt_printf(out, "\n");
 }
 
+static void bch2_btree_wakeup_all(struct bch_fs *c)
+{
+	struct btree_trans *trans;
+
+	mutex_lock(&c->btree_trans_lock);
+	list_for_each_entry(trans, &c->btree_trans_list, list) {
+		struct btree_bkey_cached_common *b = READ_ONCE(trans->locking);
+
+		if (b)
+			six_lock_wakeup_all(&b->lock);
+
+	}
+	mutex_unlock(&c->btree_trans_lock);
+}
+
 SHOW(bch2_fs)
 {
 	struct bch_fs *c = container_of(kobj, struct bch_fs, kobj);
@@ -376,16 +390,9 @@ SHOW(bch2_fs)
 	sysfs_printf(internal_uuid, "%pU",	c->sb.uuid.b);
 
 	sysfs_hprint(btree_cache_size,		bch2_btree_cache_size(c));
-	sysfs_hprint(btree_avg_write_size,	bch2_btree_avg_write_size(c));
 
-	sysfs_print(read_realloc_races,
-		    atomic_long_read(&c->read_realloc_races));
-	sysfs_print(extent_migrate_done,
-		    atomic_long_read(&c->extent_migrate_done));
-	sysfs_print(extent_migrate_raced,
-		    atomic_long_read(&c->extent_migrate_raced));
-	sysfs_print(bucket_alloc_fail,
-		    atomic_long_read(&c->bucket_alloc_fail));
+	if (attr == &sysfs_btree_write_stats)
+		bch2_btree_write_stats_to_text(out, c);
 
 	sysfs_printf(btree_gc_periodic, "%u",	(int) c->btree_gc_periodic);
 
@@ -414,7 +421,7 @@ SHOW(bch2_fs)
 		bch2_btree_updates_to_text(out, c);
 
 	if (attr == &sysfs_btree_cache)
-		bch2_btree_cache_to_text(out, c);
+		bch2_btree_cache_to_text(out, &c->btree_cache);
 
 	if (attr == &sysfs_btree_key_cache)
 		bch2_btree_key_cache_to_text(out, &c->btree_key_cache);
@@ -439,6 +446,9 @@ SHOW(bch2_fs)
 
 	if (attr == &sysfs_data_jobs)
 		data_progress_to_text(out, c);
+
+	if (attr == &sysfs_nocow_lock_table)
+		bch2_nocow_locks_to_text(out, &c->nocow_locks);
 
 	return 0;
 }
@@ -494,6 +504,9 @@ STORE(bch2_fs)
 		c->btree_cache.shrink.scan_objects(&c->btree_cache.shrink, &sc);
 	}
 
+	if (attr == &sysfs_btree_wakeup)
+		bch2_btree_wakeup_all(c);
+
 	if (attr == &sysfs_trigger_gc) {
 		/*
 		 * Full gc is currently incompatible with btree key cache:
@@ -540,7 +553,7 @@ SYSFS_OPS(bch2_fs);
 struct attribute *bch2_fs_files[] = {
 	&sysfs_minor,
 	&sysfs_btree_cache_size,
-	&sysfs_btree_avg_write_size,
+	&sysfs_btree_write_stats,
 
 	&sysfs_promote_whole_extents,
 
@@ -560,7 +573,8 @@ SHOW(bch2_fs_counters)
 	u64 counter = 0;
 	u64 counter_since_mount = 0;
 
-	out->tabstops[0] = 32;
+	printbuf_tabstop_push(out, 32);
+
 	#define x(t, ...) \
 		if (attr == &sysfs_##t) {					\
 			counter             = percpu_u64_get(&c->counters[BCH_COUNTER_##t]);\
@@ -598,12 +612,14 @@ struct attribute *bch2_fs_counters_files[] = {
 SHOW(bch2_fs_internal)
 {
 	struct bch_fs *c = container_of(kobj, struct bch_fs, internal);
+
 	return bch2_fs_to_text(out, &c->kobj, attr);
 }
 
 STORE(bch2_fs_internal)
 {
 	struct bch_fs *c = container_of(kobj, struct bch_fs, internal);
+
 	return bch2_fs_store(&c->kobj, attr, buf, size);
 }
 SYSFS_OPS(bch2_fs_internal);
@@ -616,6 +632,7 @@ struct attribute *bch2_fs_internal_files[] = {
 	&sysfs_new_stripes,
 	&sysfs_stripes_heap,
 	&sysfs_open_buckets,
+	&sysfs_nocow_lock_table,
 	&sysfs_io_timers_read,
 	&sysfs_io_timers_write,
 
@@ -623,11 +640,7 @@ struct attribute *bch2_fs_internal_files[] = {
 	&sysfs_trigger_discards,
 	&sysfs_trigger_invalidates,
 	&sysfs_prune_cache,
-
-	&sysfs_read_realloc_races,
-	&sysfs_extent_migrate_done,
-	&sysfs_extent_migrate_raced,
-	&sysfs_bucket_alloc_fail,
+	&sysfs_btree_wakeup,
 
 	&sysfs_gc_gens_pos,
 
@@ -891,6 +904,19 @@ STORE(bch2_dev)
 
 		if (v != BCH_MEMBER_DISCARD(mi)) {
 			SET_BCH_MEMBER_DISCARD(mi, v);
+			bch2_write_super(c);
+		}
+		mutex_unlock(&c->sb_lock);
+	}
+
+	if (attr == &sysfs_durability) {
+		u64 v = strtoul_or_return(buf);
+
+		mutex_lock(&c->sb_lock);
+		mi = &bch2_sb_get_members(c->disk_sb.sb)->members[ca->dev_idx];
+
+		if (v != BCH_MEMBER_DURABILITY(mi)) {
+			SET_BCH_MEMBER_DURABILITY(mi, v + 1);
 			bch2_write_super(c);
 		}
 		mutex_unlock(&c->sb_lock);

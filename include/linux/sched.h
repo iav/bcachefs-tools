@@ -7,6 +7,7 @@
 #include <linux/bug.h>
 #include <linux/completion.h>
 #include <linux/jiffies.h>
+#include <linux/rwsem.h>
 #include <linux/time64.h>
 
 #define TASK_RUNNING		0
@@ -88,6 +89,10 @@ struct task_struct {
 	pid_t			pid;
 
 	struct bio_list		*bio_list;
+
+	struct signal_struct	{
+		struct rw_semaphore exec_update_lock;
+	}			*signal, _signal;
 };
 
 extern __thread struct task_struct *current;
@@ -156,5 +161,12 @@ static inline void ktime_get_coarse_real_ts64(struct timespec64 *ts)
 
 #define current_kernel_time64()	current_kernel_time()
 #define CURRENT_TIME		(current_kernel_time())
+
+static inline unsigned int stack_trace_save_tsk(struct task_struct *task,
+				  unsigned long *store, unsigned int size,
+				  unsigned int skipnr)
+{
+	return 0;
+}
 
 #endif /* __TOOLS_LINUX_SCHED_H */

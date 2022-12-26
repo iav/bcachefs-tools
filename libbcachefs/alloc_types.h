@@ -8,6 +8,15 @@
 #include "clock_types.h"
 #include "fifo.h"
 
+struct bucket_alloc_state {
+	u64	cur_bucket;
+	u64	buckets_seen;
+	u64	skipped_open;
+	u64	skipped_need_journal_commit;
+	u64	skipped_nocow;
+	u64	skipped_nouse;
+};
+
 struct ec_bucket_buf;
 
 #define BCH_ALLOC_RESERVES()		\
@@ -67,17 +76,26 @@ struct dev_stripe_state {
 };
 
 struct write_point {
-	struct hlist_node	node;
-	struct mutex		lock;
-	u64			last_used;
-	unsigned long		write_point;
-	enum bch_data_type	data_type;
+	struct {
+		struct hlist_node	node;
+		struct mutex		lock;
+		u64			last_used;
+		unsigned long		write_point;
+		enum bch_data_type	data_type;
 
-	/* calculated based on how many pointers we're actually going to use: */
-	unsigned		sectors_free;
+		/* calculated based on how many pointers we're actually going to use: */
+		unsigned		sectors_free;
 
-	struct open_buckets	ptrs;
-	struct dev_stripe_state	stripe;
+		struct open_buckets	ptrs;
+		struct dev_stripe_state	stripe;
+	} __attribute__((__aligned__(SMP_CACHE_BYTES)));
+
+	struct {
+		struct work_struct	index_update_work;
+
+		struct list_head	writes;
+		spinlock_t		writes_lock;
+	} __attribute__((__aligned__(SMP_CACHE_BYTES)));
 };
 
 struct write_point_specifier {

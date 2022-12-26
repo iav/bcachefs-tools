@@ -341,6 +341,11 @@ enum opt_type {
 	  OPT_BOOL(),							\
 	  BCH2_NO_SB_OPT,			false,				\
 	  NULL,		"Don't open device in exclusive mode")		\
+	x(direct_io,			u8,				\
+	  OPT_FS|OPT_MOUNT,						\
+	  OPT_BOOL(),							\
+	  BCH2_NO_SB_OPT,			true,			\
+	  NULL,		"Use O_DIRECT (userspace only)")		\
 	x(sb,				u64,				\
 	  OPT_MOUNT,							\
 	  OPT_UINT(0, S64_MAX),						\
@@ -377,6 +382,13 @@ enum opt_type {
 	  OPT_BOOL(),							\
 	  BCH2_NO_SB_OPT,			false,				\
 	  NULL,		NULL)						\
+	x(nocow,			u8,				\
+	  OPT_FS|OPT_FORMAT|OPT_MOUNT|OPT_RUNTIME|OPT_INODE,		\
+	  OPT_BOOL(),							\
+	  BCH_SB_NOCOW,			false,				\
+	  NULL,		"Nocow mode: Writes will be done in place when possible.\n"\
+			"Snapshots and reflink will still caused writes to be COW\n"\
+			"Implicitly disables data checksumming, compression and encryption")\
 	x(fs_size,			u64,				\
 	  OPT_DEVICE,							\
 	  OPT_UINT(0, S64_MAX),						\
@@ -487,18 +499,12 @@ int bch2_parse_mount_opts(struct bch_fs *, struct bch_opts *, char *);
 /* inode opts: */
 
 struct bch_io_opts {
-#define x(_name, _bits)	unsigned _name##_defined:1;
-	BCH_INODE_OPTS()
-#undef x
-
 #define x(_name, _bits)	u##_bits _name;
 	BCH_INODE_OPTS()
 #undef x
 };
 
 struct bch_io_opts bch2_opts_to_inode_opts(struct bch_opts);
-struct bch_opts bch2_inode_opts_to_opts(struct bch_io_opts);
-void bch2_io_opts_apply(struct bch_io_opts *, struct bch_io_opts);
 bool bch2_opt_is_inode_opt(enum bch_opt_id);
 
 #endif /* _BCACHEFS_OPTS_H */

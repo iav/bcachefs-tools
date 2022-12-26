@@ -8,6 +8,7 @@
 
 #include <linux/bio.h>
 #include <linux/blkdev.h>
+#include <linux/console.h>
 #include <linux/ctype.h>
 #include <linux/debugfs.h>
 #include <linux/freezer.h>
@@ -21,6 +22,7 @@
 #include <linux/string.h>
 #include <linux/types.h>
 #include <linux/sched/clock.h>
+#include <linux/mean_and_variance.h>
 
 #include "eytzinger.h"
 #include "util.h"
@@ -268,51 +270,119 @@ static void bch2_quantiles_update(struct quantiles *q, u64 v)
 	}
 }
 
+void bch2_prt_u64_binary(struct printbuf *out, u64 v, unsigned nr_bits)
+{
+	while (nr_bits)
+		prt_char(out, '0' + ((v >> --nr_bits) & 1));
+}
+
+void bch2_print_string_as_lines(const char *prefix, const char *lines)
+{
+	const char *p;
+
+	if (!lines) {
+		printk("%s (null)\n", prefix);
+		return;
+	}
+
+	console_lock();
+	while (1) {
+		p = strchrnul(lines, '\n');
+		printk("%s%.*s\n", prefix, (int) (p - lines), lines);
+		if (!*p)
+			break;
+		lines = p + 1;
+		prefix = KERN_CONT;
+	}
+	console_unlock();
+}
+
+int bch2_prt_backtrace(struct printbuf *out, struct task_struct *task)
+{
+	unsigned long entries[32];
+	unsigned i, nr_entries;
+	int ret;
+
+	ret = down_read_killable(&task->signal->exec_update_lock);
+	if (ret)
+		return ret;
+
+	nr_entries = stack_trace_save_tsk(task, entries, ARRAY_SIZE(entries), 0);
+	for (i = 0; i < nr_entries; i++) {
+		prt_printf(out, "[<0>] %pB", (void *)entries[i]);
+		prt_newline(out);
+	}
+
+	up_read(&task->signal->exec_update_lock);
+	return 0;
+}
+
 /* time stats: */
 
-static void bch2_time_stats_update_one(struct time_stats *stats,
-				       u64 start, u64 end)
+static inline void bch2_time_stats_update_one(struct time_stats *stats,
+					      u64 start, u64 end)
 {
 	u64 duration, freq;
 
-	duration	= time_after64(end, start)
-		? end - start : 0;
-	freq		= time_after64(end, stats->last_event)
-		? end - stats->last_event : 0;
+	if (time_after64(end, start)) {
+		duration = end - start;
+		stats->duration_stats = mean_and_variance_update_inlined(stats->duration_stats,
+								 duration);
+		stats->duration_stats_weighted = mean_and_variance_weighted_update(
+			stats->duration_stats_weighted,
+			duration);
+		stats->max_duration = max(stats->max_duration, duration);
+		stats->min_duration = min(stats->min_duration, duration);
+		bch2_quantiles_update(&stats->quantiles, duration);
+	}
 
-	stats->count++;
+	if (time_after64(end, stats->last_event)) {
+		freq = end - stats->last_event;
+		stats->freq_stats = mean_and_variance_update_inlined(stats->freq_stats, freq);
+		stats->freq_stats_weighted = mean_and_variance_weighted_update(
+			stats->freq_stats_weighted,
+			freq);
+		stats->max_freq = max(stats->max_freq, freq);
+		stats->min_freq = min(stats->min_freq, freq);
+		stats->last_event = end;
+	}
+}
 
-	stats->average_duration = stats->average_duration
-		? ewma_add(stats->average_duration, duration, 6)
-		: duration;
+static noinline void bch2_time_stats_clear_buffer(struct time_stats *stats,
+						  struct time_stat_buffer *b)
+{
+	struct time_stat_buffer_entry *i;
+	unsigned long flags;
 
-	stats->average_frequency = stats->average_frequency
-		? ewma_add(stats->average_frequency, freq, 6)
-		: freq;
+	spin_lock_irqsave(&stats->lock, flags);
+	for (i = b->entries;
+	     i < b->entries + ARRAY_SIZE(b->entries);
+	     i++)
+		bch2_time_stats_update_one(stats, i->start, i->end);
+	spin_unlock_irqrestore(&stats->lock, flags);
 
-	stats->max_duration = max(stats->max_duration, duration);
-
-	stats->last_event = end;
-
-	bch2_quantiles_update(&stats->quantiles, duration);
+	b->nr = 0;
 }
 
 void __bch2_time_stats_update(struct time_stats *stats, u64 start, u64 end)
 {
 	unsigned long flags;
 
+	WARN_RATELIMIT(!stats->min_duration || !stats->min_freq,
+		       "time_stats: min_duration = %llu, min_freq = %llu",
+		       stats->min_duration, stats->min_freq);
+
 	if (!stats->buffer) {
 		spin_lock_irqsave(&stats->lock, flags);
 		bch2_time_stats_update_one(stats, start, end);
 
-		if (stats->average_frequency < 32 &&
-		    stats->count > 1024)
+		if (mean_and_variance_weighted_get_mean(stats->freq_stats_weighted) < 32 &&
+		    stats->duration_stats.n > 1024)
 			stats->buffer =
 				alloc_percpu_gfp(struct time_stat_buffer,
 						 GFP_ATOMIC);
 		spin_unlock_irqrestore(&stats->lock, flags);
 	} else {
-		struct time_stat_buffer_entry *i;
 		struct time_stat_buffer *b;
 
 		preempt_disable();
@@ -324,29 +394,23 @@ void __bch2_time_stats_update(struct time_stats *stats, u64 start, u64 end)
 			.end = end
 		};
 
-		if (b->nr == ARRAY_SIZE(b->entries)) {
-			spin_lock_irqsave(&stats->lock, flags);
-			for (i = b->entries;
-			     i < b->entries + ARRAY_SIZE(b->entries);
-			     i++)
-				bch2_time_stats_update_one(stats, i->start, i->end);
-			spin_unlock_irqrestore(&stats->lock, flags);
-
-			b->nr = 0;
-		}
-
+		if (unlikely(b->nr == ARRAY_SIZE(b->entries)))
+			bch2_time_stats_clear_buffer(stats, b);
 		preempt_enable();
 	}
 }
 
 static const struct time_unit {
 	const char	*name;
-	u32		nsecs;
+	u64		nsecs;
 } time_units[] = {
-	{ "ns",		1		},
-	{ "us",		NSEC_PER_USEC	},
-	{ "ms",		NSEC_PER_MSEC	},
-	{ "sec",	NSEC_PER_SEC	},
+	{ "ns",		1		 },
+	{ "us",		NSEC_PER_USEC	 },
+	{ "ms",		NSEC_PER_MSEC	 },
+	{ "s",		NSEC_PER_SEC	 },
+	{ "m",          NSEC_PER_SEC * 60},
+	{ "h",          NSEC_PER_SEC * 3600},
+	{ "eon",        U64_MAX          },
 };
 
 static const struct time_unit *pick_time_units(u64 ns)
@@ -366,41 +430,126 @@ static void pr_time_units(struct printbuf *out, u64 ns)
 {
 	const struct time_unit *u = pick_time_units(ns);
 
-	prt_printf(out, "%llu %s", div_u64(ns, u->nsecs), u->name);
+	prt_printf(out, "%llu ", div64_u64(ns, u->nsecs));
+	prt_tab_rjust(out);
+	prt_printf(out, "%s", u->name);
+}
+
+#define TABSTOP_SIZE 12
+
+static inline void pr_name_and_units(struct printbuf *out, const char *name, u64 ns)
+{
+	prt_str(out, name);
+	prt_tab(out);
+	pr_time_units(out, ns);
+	prt_newline(out);
 }
 
 void bch2_time_stats_to_text(struct printbuf *out, struct time_stats *stats)
 {
 	const struct time_unit *u;
-	u64 freq = READ_ONCE(stats->average_frequency);
-	u64 q, last_q = 0;
+	s64 f_mean = 0, d_mean = 0;
+	u64 q, last_q = 0, f_stddev = 0, d_stddev = 0;
 	int i;
+	/*
+	 * avoid divide by zero
+	 */
+	if (stats->freq_stats.n) {
+		f_mean = mean_and_variance_get_mean(stats->freq_stats);
+		f_stddev = mean_and_variance_get_stddev(stats->freq_stats);
+		d_mean = mean_and_variance_get_mean(stats->duration_stats);
+		d_stddev = mean_and_variance_get_stddev(stats->duration_stats);
+	}
 
-	prt_printf(out, "count:\t\t%llu\n",
-			 stats->count);
-	prt_printf(out, "rate:\t\t%llu/sec\n",
-	       freq ?  div64_u64(NSEC_PER_SEC, freq) : 0);
+	printbuf_tabstop_push(out, out->indent + TABSTOP_SIZE);
+	prt_printf(out, "count:");
+	prt_tab(out);
+	prt_printf(out, "%llu ",
+			 stats->duration_stats.n);
+	printbuf_tabstop_pop(out);
+	prt_newline(out);
 
-	prt_printf(out, "frequency:\t");
-	pr_time_units(out, freq);
+	printbuf_tabstops_reset(out);
 
-	prt_printf(out, "\navg duration:\t");
-	pr_time_units(out, stats->average_duration);
+	printbuf_tabstop_push(out, out->indent + 20);
+	printbuf_tabstop_push(out, TABSTOP_SIZE + 2);
+	printbuf_tabstop_push(out, 0);
+	printbuf_tabstop_push(out, TABSTOP_SIZE + 2);
 
-	prt_printf(out, "\nmax duration:\t");
-	pr_time_units(out, stats->max_duration);
+	prt_tab(out);
+	prt_printf(out, "since mount");
+	prt_tab_rjust(out);
+	prt_tab(out);
+	prt_printf(out, "recent");
+	prt_tab_rjust(out);
+	prt_newline(out);
+
+	printbuf_tabstops_reset(out);
+	printbuf_tabstop_push(out, out->indent + 20);
+	printbuf_tabstop_push(out, TABSTOP_SIZE);
+	printbuf_tabstop_push(out, 2);
+	printbuf_tabstop_push(out, TABSTOP_SIZE);
+
+	prt_printf(out, "duration of events");
+	prt_newline(out);
+	printbuf_indent_add(out, 2);
+
+	pr_name_and_units(out, "min:", stats->min_duration);
+	pr_name_and_units(out, "max:", stats->max_duration);
+
+	prt_printf(out, "mean:");
+	prt_tab(out);
+	pr_time_units(out, d_mean);
+	prt_tab(out);
+	pr_time_units(out, mean_and_variance_weighted_get_mean(stats->duration_stats_weighted));
+	prt_newline(out);
+
+	prt_printf(out, "stddev:");
+	prt_tab(out);
+	pr_time_units(out, d_stddev);
+	prt_tab(out);
+	pr_time_units(out, mean_and_variance_weighted_get_stddev(stats->duration_stats_weighted));
+
+	printbuf_indent_sub(out, 2);
+	prt_newline(out);
+
+	prt_printf(out, "time between events");
+	prt_newline(out);
+	printbuf_indent_add(out, 2);
+
+	pr_name_and_units(out, "min:", stats->min_freq);
+	pr_name_and_units(out, "max:", stats->max_freq);
+
+	prt_printf(out, "mean:");
+	prt_tab(out);
+	pr_time_units(out, f_mean);
+	prt_tab(out);
+	pr_time_units(out, mean_and_variance_weighted_get_mean(stats->freq_stats_weighted));
+	prt_newline(out);
+
+	prt_printf(out, "stddev:");
+	prt_tab(out);
+	pr_time_units(out, f_stddev);
+	prt_tab(out);
+	pr_time_units(out, mean_and_variance_weighted_get_stddev(stats->freq_stats_weighted));
+
+	printbuf_indent_sub(out, 2);
+	prt_newline(out);
+
+	printbuf_tabstops_reset(out);
 
 	i = eytzinger0_first(NR_QUANTILES);
 	u = pick_time_units(stats->quantiles.entries[i].m);
 
-	prt_printf(out, "\nquantiles (%s):\t", u->name);
+	prt_printf(out, "quantiles (%s):\t", u->name);
 	eytzinger0_for_each(i, NR_QUANTILES) {
 		bool is_last = eytzinger0_next(i, NR_QUANTILES) == -1;
 
 		q = max(stats->quantiles.entries[i].m, last_q);
-		prt_printf(out, "%llu%s",
-		       div_u64(q, u->nsecs),
-		       is_last ? "\n" : " ");
+		prt_printf(out, "%llu ",
+		       div_u64(q, u->nsecs));
+		if (is_last)
+			prt_newline(out);
 		last_q = q;
 	}
 }
@@ -413,6 +562,10 @@ void bch2_time_stats_exit(struct time_stats *stats)
 void bch2_time_stats_init(struct time_stats *stats)
 {
 	memset(stats, 0, sizeof(*stats));
+	stats->duration_stats_weighted.w = 8;
+	stats->freq_stats_weighted.w = 8;
+	stats->min_duration = U64_MAX;
+	stats->min_freq = U64_MAX;
 	spin_lock_init(&stats->lock);
 }
 
@@ -520,7 +673,8 @@ void bch2_pd_controller_init(struct bch_pd_controller *pd)
 
 void bch2_pd_controller_debug_to_text(struct printbuf *out, struct bch_pd_controller *pd)
 {
-	out->tabstops[0] = 20;
+	if (!out->nr_tabstops)
+		printbuf_tabstop_push(out, 20);
 
 	prt_printf(out, "rate:");
 	prt_tab(out);
@@ -637,8 +791,6 @@ void memcpy_from_bio(void *dst, struct bio *src, struct bvec_iter src_iter)
 		dst += bv.bv_len;
 	}
 }
-
-#include "eytzinger.h"
 
 static int alignment_ok(const void *base, size_t align)
 {

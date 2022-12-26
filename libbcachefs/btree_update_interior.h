@@ -52,6 +52,7 @@ struct btree_update {
 	unsigned			took_gc_lock:1;
 
 	enum btree_id			btree_id;
+	unsigned			update_level;
 
 	struct disk_reservation		disk_res;
 	struct journal_preres		journal_preres;
@@ -117,6 +118,7 @@ struct btree_update {
 };
 
 struct btree *__bch2_btree_node_alloc_replacement(struct btree_update *,
+						  struct btree_trans *,
 						  struct btree *,
 						  struct bkey_format);
 
@@ -280,6 +282,7 @@ static inline void push_whiteout(struct bch_fs *c, struct btree *b,
 	struct bkey_packed k;
 
 	BUG_ON(bch_btree_keys_u64s_remaining(c, b) < BKEY_U64s);
+	EBUG_ON(btree_node_just_written(b));
 
 	if (!bkey_pack_pos(&k, pos, b)) {
 		struct bkey *u = (void *) &k;

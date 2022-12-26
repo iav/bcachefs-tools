@@ -13,6 +13,7 @@
 #include "buckets.h"
 #include "clock.h"
 #include "disk_groups.h"
+#include "errcode.h"
 #include "error.h"
 #include "extents.h"
 #include "eytzinger.h"
@@ -43,7 +44,6 @@ static int find_buckets_to_copygc(struct bch_fs *c)
 	struct btree_trans trans;
 	struct btree_iter iter;
 	struct bkey_s_c k;
-	struct bch_alloc_v4 a;
 	int ret;
 
 	bch2_trans_init(&trans, c, 0, 0);
@@ -60,22 +60,24 @@ static int find_buckets_to_copygc(struct bch_fs *c)
 			   BTREE_ITER_PREFETCH, k, ret) {
 		struct bch_dev *ca = bch_dev_bkey_exists(c, iter.pos.inode);
 		struct copygc_heap_entry e;
+		struct bch_alloc_v4 a_convert;
+		const struct bch_alloc_v4 *a;
 
-		bch2_alloc_to_v4(k, &a);
+		a = bch2_alloc_to_v4(k, &a_convert);
 
-		if ((a.data_type != BCH_DATA_btree &&
-		     a.data_type != BCH_DATA_user) ||
-		    a.dirty_sectors >= ca->mi.bucket_size ||
+		if ((a->data_type != BCH_DATA_btree &&
+		     a->data_type != BCH_DATA_user) ||
+		    a->dirty_sectors >= ca->mi.bucket_size ||
 		    bch2_bucket_is_open(c, iter.pos.inode, iter.pos.offset))
 			continue;
 
 		e = (struct copygc_heap_entry) {
 			.dev		= iter.pos.inode,
-			.gen		= a.gen,
-			.replicas	= 1 + a.stripe_redundancy,
-			.fragmentation	= div_u64((u64) a.dirty_sectors * (1ULL << 31),
+			.gen		= a->gen,
+			.replicas	= 1 + a->stripe_redundancy,
+			.fragmentation	= div_u64((u64) a->dirty_sectors * (1ULL << 31),
 						  ca->mi.bucket_size),
-			.sectors	= a.dirty_sectors,
+			.sectors	= a->dirty_sectors,
 			.bucket		= iter.pos.offset,
 		};
 		heap_add_or_replace(h, e, -fragmentation_cmp, NULL);
@@ -101,7 +103,7 @@ static int bch2_copygc(struct bch_fs *c)
 	};
 	int ret = 0;
 
-	bch_move_stats_init(&move_stats, "copygc");
+	bch2_move_stats_init(&move_stats, "copygc");
 
 	for_each_rw_member(ca, c, dev_idx)
 		heap_size += ca->mi.nbuckets >> 7;
@@ -161,10 +163,10 @@ static int bch2_copygc(struct bch_fs *c)
 
 	bch2_moving_ctxt_exit(&ctxt);
 
-	if (ret < 0)
-		bch_err(c, "error %i from bch2_move_data() in copygc", ret);
+	if (ret < 0 && !bch2_err_matches(ret, EROFS))
+		bch_err(c, "error from bch2_move_data() in copygc: %s", bch2_err_str(ret));
 
-	trace_copygc(c, atomic64_read(&move_stats.sectors_moved), 0, 0, 0);
+	trace_and_count(c, copygc, c, atomic64_read(&move_stats.sectors_moved), 0, 0, 0);
 	return ret;
 }
 
@@ -220,7 +222,7 @@ static int bch2_copygc_thread(void *arg)
 		wait = bch2_copygc_wait_amount(c);
 
 		if (wait > clock->max_slop) {
-			trace_copygc_wait(c, wait, last + wait);
+			trace_and_count(c, copygc_wait, c, wait, last + wait);
 			c->copygc_wait = last + wait;
 			bch2_kthread_io_clock_wait(clock, last + wait,
 					MAX_SCHEDULE_TIMEOUT);
@@ -251,6 +253,7 @@ void bch2_copygc_stop(struct bch_fs *c)
 int bch2_copygc_start(struct bch_fs *c)
 {
 	struct task_struct *t;
+	int ret;
 
 	if (c->copygc_thread)
 		return 0;
@@ -262,9 +265,10 @@ int bch2_copygc_start(struct bch_fs *c)
 		return -ENOMEM;
 
 	t = kthread_create(bch2_copygc_thread, c, "bch-copygc/%s", c->name);
-	if (IS_ERR(t)) {
-		bch_err(c, "error creating copygc thread: %li", PTR_ERR(t));
-		return PTR_ERR(t);
+	ret = PTR_ERR_OR_ZERO(t);
+	if (ret) {
+		bch_err(c, "error creating copygc thread: %s", bch2_err_str(ret));
+		return ret;
 	}
 
 	get_task_struct(t);

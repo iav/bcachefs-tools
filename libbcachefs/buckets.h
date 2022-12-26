@@ -139,7 +139,15 @@ static inline u8 ptr_stale(struct bch_dev *ca,
 
 /* Device usage: */
 
-struct bch_dev_usage bch2_dev_usage_read(struct bch_dev *);
+void bch2_dev_usage_read_fast(struct bch_dev *, struct bch_dev_usage *);
+static inline struct bch_dev_usage bch2_dev_usage_read(struct bch_dev *ca)
+{
+	struct bch_dev_usage ret;
+
+	bch2_dev_usage_read_fast(ca, &ret);
+	return ret;
+}
+
 void bch2_dev_usage_init(struct bch_dev *);
 
 static inline u64 bch2_dev_buckets_reserved(struct bch_dev *ca, enum alloc_reserve reserve)
@@ -240,8 +248,6 @@ int bch2_trans_mark_inode(struct btree_trans *, enum btree_id, unsigned, struct 
 int bch2_trans_mark_reservation(struct btree_trans *, enum btree_id, unsigned, struct bkey_s_c, struct bkey_i *, unsigned);
 int bch2_trans_mark_reflink_p(struct btree_trans *, enum btree_id, unsigned, struct bkey_s_c, struct bkey_i *, unsigned);
 
-int bch2_mark_key(struct btree_trans *, struct bkey_s_c, struct bkey_s_c, unsigned);
-
 int bch2_trans_fs_usage_apply(struct btree_trans *, struct replicas_delta_list *);
 
 int bch2_trans_mark_metadata_bucket(struct btree_trans *, struct bch_dev *,
@@ -253,15 +259,39 @@ int bch2_trans_mark_dev_sb(struct bch_fs *, struct bch_dev *);
 static inline void bch2_disk_reservation_put(struct bch_fs *c,
 					     struct disk_reservation *res)
 {
-	this_cpu_sub(*c->online_reserved, res->sectors);
-	res->sectors = 0;
+	if (res->sectors) {
+		this_cpu_sub(*c->online_reserved, res->sectors);
+		res->sectors = 0;
+	}
 }
 
 #define BCH_DISK_RESERVATION_NOFAIL		(1 << 0)
 
-int bch2_disk_reservation_add(struct bch_fs *,
-			      struct disk_reservation *,
-			      u64, int);
+int __bch2_disk_reservation_add(struct bch_fs *,
+				struct disk_reservation *,
+				u64, int);
+
+static inline int bch2_disk_reservation_add(struct bch_fs *c, struct disk_reservation *res,
+					    u64 sectors, int flags)
+{
+#ifdef __KERNEL__
+	u64 old, new;
+
+	do {
+		old = this_cpu_read(c->pcpu->sectors_available);
+		if (sectors > old)
+			return __bch2_disk_reservation_add(c, res, sectors, flags);
+
+		new = old - sectors;
+	} while (this_cpu_cmpxchg(c->pcpu->sectors_available, old, new) != old);
+
+	this_cpu_add(*c->online_reserved, sectors);
+	res->sectors			+= sectors;
+	return 0;
+#else
+	return __bch2_disk_reservation_add(c, res, sectors, flags);
+#endif
+}
 
 static inline struct disk_reservation
 bch2_disk_reservation_init(struct bch_fs *c, unsigned nr_replicas)

@@ -85,7 +85,7 @@ int bch2_reflink_v_invalid(const struct bch_fs *c, struct bkey_s_c k,
 	if (bkey_val_bytes(r.k) < sizeof(*r.v)) {
 		prt_printf(err, "incorrect value size (%zu < %zu)",
 		       bkey_val_bytes(r.k), sizeof(*r.v));
-		return -EINVAL;
+		return -BCH_ERR_invalid_bkey;
 	}
 
 	return bch2_bkey_ptrs_invalid(c, k, rw, err);
@@ -136,7 +136,7 @@ int bch2_indirect_inline_data_invalid(const struct bch_fs *c, struct bkey_s_c k,
 	if (bkey_val_bytes(k.k) < sizeof(struct bch_indirect_inline_data)) {
 		prt_printf(err, "incorrect value size (%zu < %zu)",
 		       bkey_val_bytes(k.k), sizeof(struct bch_indirect_inline_data));
-		return -EINVAL;
+		return -BCH_ERR_invalid_bkey;
 	}
 
 	return 0;
@@ -251,15 +251,15 @@ static struct bkey_s_c get_next_src(struct btree_iter *iter, struct bpos end)
 	struct bkey_s_c k;
 	int ret;
 
-	for_each_btree_key_continue_norestart(*iter, 0, k, ret) {
-		if (bkey_cmp(iter->pos, end) >= 0)
-			break;
+	for_each_btree_key_upto_continue_norestart(*iter, end, 0, k, ret) {
+		if (bkey_extent_is_unwritten(k))
+			continue;
 
 		if (bkey_extent_is_data(k.k))
 			return k;
 	}
 
-	if (bkey_cmp(iter->pos, end) >= 0)
+	if (bkey_ge(iter->pos, end))
 		bch2_btree_iter_set_pos(iter, end);
 	return ret ? bkey_s_c_err(ret) : bkey_s_c_null;
 }
@@ -283,7 +283,7 @@ s64 bch2_remap_range(struct bch_fs *c,
 	int ret = 0, ret2 = 0;
 
 	if (!percpu_ref_tryget_live(&c->writes))
-		return -EROFS;
+		return -BCH_ERR_erofs_no_writes;
 
 	bch2_check_set_feature(c, BCH_FEATURE_reflink);
 
@@ -299,8 +299,9 @@ s64 bch2_remap_range(struct bch_fs *c,
 	bch2_trans_iter_init(&trans, &dst_iter, BTREE_ID_extents, dst_start,
 			     BTREE_ITER_INTENT);
 
-	while ((ret == 0 || ret == -EINTR) &&
-	       bkey_cmp(dst_iter.pos, dst_end) < 0) {
+	while ((ret == 0 ||
+		bch2_err_matches(ret, BCH_ERR_transaction_restart)) &&
+	       bkey_lt(dst_iter.pos, dst_end)) {
 		struct disk_reservation disk_res = { 0 };
 
 		bch2_trans_begin(&trans);
@@ -333,7 +334,7 @@ s64 bch2_remap_range(struct bch_fs *c,
 		if (ret)
 			continue;
 
-		if (bkey_cmp(src_want, src_iter.pos) < 0) {
+		if (bkey_lt(src_want, src_iter.pos)) {
 			ret = bch2_fpunch_at(&trans, &dst_iter, dst_inum,
 					min(dst_end.offset,
 					    dst_iter.pos.offset +
@@ -377,7 +378,7 @@ s64 bch2_remap_range(struct bch_fs *c,
 				    dst_end.offset - dst_iter.pos.offset));
 
 		ret = bch2_extent_update(&trans, dst_inum, &dst_iter,
-					 new_dst.k, &disk_res, NULL,
+					 new_dst.k, &disk_res,
 					 new_i_size, i_sectors_delta,
 					 true);
 		bch2_disk_reservation_put(c, &disk_res);
@@ -385,8 +386,8 @@ s64 bch2_remap_range(struct bch_fs *c,
 	bch2_trans_iter_exit(&trans, &dst_iter);
 	bch2_trans_iter_exit(&trans, &src_iter);
 
-	BUG_ON(!ret && bkey_cmp(dst_iter.pos, dst_end));
-	BUG_ON(bkey_cmp(dst_iter.pos, dst_end) > 0);
+	BUG_ON(!ret && !bkey_eq(dst_iter.pos, dst_end));
+	BUG_ON(bkey_gt(dst_iter.pos, dst_end));
 
 	dst_done = dst_iter.pos.offset - dst_start.offset;
 	new_i_size = min(dst_iter.pos.offset << 9, new_i_size);
@@ -409,7 +410,7 @@ s64 bch2_remap_range(struct bch_fs *c,
 		}
 
 		bch2_trans_iter_exit(&trans, &inode_iter);
-	} while (ret2 == -EINTR);
+	} while (bch2_err_matches(ret2, BCH_ERR_transaction_restart));
 
 	bch2_trans_exit(&trans);
 	bch2_bkey_buf_exit(&new_src, c);

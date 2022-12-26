@@ -17,6 +17,7 @@
 #include "libbcachefs/btree_iter.h"
 #include "libbcachefs/buckets.h"
 #include "libbcachefs/dirent.h"
+#include "libbcachefs/errcode.h"
 #include "libbcachefs/error.h"
 #include "libbcachefs/fs-common.h"
 #include "libbcachefs/inode.h"
@@ -1229,7 +1230,7 @@ int cmd_fusemount(int argc, char *argv[])
 	c = bch2_fs_open(ctx.devices, ctx.nr_devices, bch_opts);
 	if (IS_ERR(c))
 		die("error opening %s: %s", ctx.devices_str,
-		    strerror(-PTR_ERR(c)));
+		    bch2_err_str(PTR_ERR(c)));
 
 	/* Fuse */
 	struct fuse_session *se =

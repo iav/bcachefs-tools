@@ -95,13 +95,12 @@ void bch2_dump_bset(struct bch_fs *c, struct btree *b,
 
 		n = bkey_unpack_key(b, _n);
 
-		if (bpos_cmp(n.p, k.k->p) < 0) {
+		if (bpos_lt(n.p, k.k->p)) {
 			printk(KERN_ERR "Key skipped backwards\n");
 			continue;
 		}
 
-		if (!bkey_deleted(k.k) &&
-		    !bpos_cmp(n.p, k.k->p))
+		if (!bkey_deleted(k.k) && bpos_eq(n.p, k.k->p))
 			printk(KERN_ERR "Duplicate keys\n");
 	}
 
@@ -542,7 +541,7 @@ static void bch2_bset_verify_rw_aux_tree(struct btree *b,
 	goto start;
 	while (1) {
 		if (rw_aux_to_bkey(b, t, j) == k) {
-			BUG_ON(bpos_cmp(rw_aux_tree(b, t)[j].k,
+			BUG_ON(!bpos_eq(rw_aux_tree(b, t)[j].k,
 					bkey_unpack_pos(b, k)));
 start:
 			if (++j == t->size)
@@ -965,7 +964,7 @@ static void bch2_bset_fix_lookup_table(struct btree *b,
 	t->size -= j - l;
 
 	for (j = l; j < t->size; j++)
-	       rw_aux_tree(b, t)[j].offset += shift;
+		rw_aux_tree(b, t)[j].offset += shift;
 
 	EBUG_ON(l < t->size &&
 		rw_aux_tree(b, t)[l].offset ==
@@ -1077,7 +1076,7 @@ static struct bkey_packed *bset_search_write_set(const struct btree *b,
 	while (l + 1 != r) {
 		unsigned m = (l + r) >> 1;
 
-		if (bpos_cmp(rw_aux_tree(b, t)[m].k, *search) < 0)
+		if (bpos_lt(rw_aux_tree(b, t)[m].k, *search))
 			l = m;
 		else
 			r = m;
@@ -1266,7 +1265,7 @@ void bch2_btree_node_iter_push(struct btree_node_iter *iter,
 	bch2_btree_node_iter_sort(iter, b);
 }
 
-noinline __flatten __attribute__((cold))
+noinline __flatten __cold
 static void btree_node_iter_init_pack_failed(struct btree_node_iter *iter,
 			      struct btree *b, struct bpos *search)
 {
@@ -1330,8 +1329,8 @@ void bch2_btree_node_iter_init(struct btree_node_iter *iter,
 	struct bkey_packed *k[MAX_BSETS];
 	unsigned i;
 
-	EBUG_ON(bpos_cmp(*search, b->data->min_key) < 0);
-	EBUG_ON(bpos_cmp(*search, b->data->max_key) > 0);
+	EBUG_ON(bpos_lt(*search, b->data->min_key));
+	EBUG_ON(bpos_gt(*search, b->data->max_key));
 	bset_aux_tree_verify(b);
 
 	memset(iter, 0, sizeof(*iter));
@@ -1441,7 +1440,10 @@ static inline void __bch2_btree_node_iter_advance(struct btree_node_iter *iter,
 	EBUG_ON(iter->data->k > iter->data->end);
 
 	if (unlikely(__btree_node_iter_set_end(iter, 0))) {
-		bch2_btree_node_iter_set_drop(iter, iter->data);
+		/* avoid an expensive memmove call: */
+		iter->data[0] = iter->data[1];
+		iter->data[1] = iter->data[2];
+		iter->data[2] = (struct btree_node_iter_set) { 0, 0 };
 		return;
 	}
 

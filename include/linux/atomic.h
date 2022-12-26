@@ -54,6 +54,8 @@ typedef struct {
 #define __ATOMIC_ADD_RETURN_RELEASE(v, p)				\
 					__atomic_add_fetch(p, v, __ATOMIC_RELEASE)
 #define __ATOMIC_SUB_RETURN(v, p)	__atomic_sub_fetch(p, v, __ATOMIC_RELAXED)
+#define __ATOMIC_SUB_RETURN_RELEASE(v, p)				\
+					__atomic_sub_fetch(p, v, __ATOMIC_RELEASE)
 
 #define xchg(p, v)			__atomic_exchange_n(p, v, __ATOMIC_SEQ_CST)
 #define xchg_acquire(p, v)		__atomic_exchange_n(p, v, __ATOMIC_ACQUIRE)
@@ -123,6 +125,11 @@ do {									\
 	({ smp_mb__before_atomic(); __ATOMIC_ADD_RETURN(i, v); })
 #endif
 
+#ifndef __ATOMIC_SUB_RETURN_RELEASE
+#define __ATOMIC_SUB_RETURN_RELEASE(i, v)				\
+	({ smp_mb__before_atomic(); __ATOMIC_SUB_RETURN(i, v); })
+#endif
+
 #ifndef __ATOMIC_SUB
 #define __ATOMIC_SUB(i, v) __ATOMIC_SUB_RETURN(i, v)
 #endif
@@ -162,6 +169,11 @@ static inline i_type a_type##_add_return(i_type i, a_type##_t *v)	\
 static inline i_type a_type##_add_return_release(i_type i, a_type##_t *v)\
 {									\
 	return __ATOMIC_ADD_RETURN_RELEASE(i, &v->counter);		\
+}									\
+									\
+static inline i_type a_type##_sub_return_release(i_type i, a_type##_t *v)\
+{									\
+	return __ATOMIC_SUB_RETURN_RELEASE(i, &v->counter);		\
 }									\
 									\
 static inline i_type a_type##_sub_return(i_type i, a_type##_t *v)	\

@@ -39,7 +39,7 @@ static void init_layout(struct bch_sb_layout *l,
 
 	memset(l, 0, sizeof(*l));
 
-	l->magic		= BCACHE_MAGIC;
+	l->magic		= BCHFS_MAGIC;
 	l->layout_type		= 0;
 	l->nr_superblocks	= 2;
 	l->sb_max_size_bits	= ilog2(sb_size);
@@ -188,7 +188,7 @@ struct bch_sb *bch2_format(struct bch_opt_strs	fs_opt_strs,
 
 	sb.sb->version		= le16_to_cpu(opts.version);
 	sb.sb->version_min	= le16_to_cpu(opts.version);
-	sb.sb->magic		= BCACHE_MAGIC;
+	sb.sb->magic		= BCHFS_MAGIC;
 	sb.sb->user_uuid	= opts.uuid;
 	sb.sb->nr_devices	= nr_devs;
 
@@ -353,7 +353,8 @@ struct bch_sb *__bch2_super_read(int fd, u64 sector)
 
 	xpread(fd, &sb, sizeof(sb), sector << 9);
 
-	if (memcmp(&sb.magic, &BCACHE_MAGIC, sizeof(sb.magic)))
+	if (memcmp(&sb.magic, &BCACHE_MAGIC, sizeof(sb.magic)) &&
+	    memcmp(&sb.magic, &BCHFS_MAGIC, sizeof(sb.magic)))
 		die("not a bcachefs superblock");
 
 	size_t bytes = vstruct_bytes(&sb);

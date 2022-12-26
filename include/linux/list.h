@@ -10,6 +10,7 @@
 #define list_add(n, h)			cds_list_add(n, h)
 #define list_add_tail(n, h)		cds_list_add_tail(n, h)
 #define __list_del_entry(l)		cds_list_del(l)
+#define __list_del(p, n)		__cds_list_del(p, n)
 #define list_del(l)			cds_list_del(l)
 #define list_del_init(l)		cds_list_del_init(l)
 #define list_replace(o, n)		cds_list_replace(o, n)

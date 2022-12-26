@@ -27,7 +27,7 @@ static int bch2_sb_disk_groups_validate(struct bch_sb *sb,
 	struct bch_sb_field_members *mi = bch2_sb_get_members(sb);
 	unsigned nr_groups = disk_groups_nr(groups);
 	unsigned i, len;
-	int ret = -EINVAL;
+	int ret = 0;
 
 	for (i = 0; i < sb->nr_devices; i++) {
 		struct bch_member *m = mi->members + i;
@@ -41,12 +41,12 @@ static int bch2_sb_disk_groups_validate(struct bch_sb *sb,
 		if (g >= nr_groups) {
 			prt_printf(err, "disk %u has invalid label %u (have %u)",
 			       i, g, nr_groups);
-			return -EINVAL;
+			return -BCH_ERR_invalid_sb_disk_groups;
 		}
 
 		if (BCH_GROUP_DELETED(&groups->entries[g])) {
 			prt_printf(err, "disk %u has deleted label %u", i, g);
-			return -EINVAL;
+			return -BCH_ERR_invalid_sb_disk_groups;
 		}
 	}
 
@@ -62,7 +62,7 @@ static int bch2_sb_disk_groups_validate(struct bch_sb *sb,
 		len = strnlen(g->label, sizeof(g->label));
 		if (!len) {
 			prt_printf(err, "label %u empty", i);
-			return -EINVAL;
+			return -BCH_ERR_invalid_sb_disk_groups;
 		}
 	}
 
@@ -79,13 +79,12 @@ static int bch2_sb_disk_groups_validate(struct bch_sb *sb,
 			prt_printf(err, "duplicate label %llu.%.*s",
 			       BCH_GROUP_PARENT(g),
 			       (int) sizeof(g->label), g->label);
+			ret = -BCH_ERR_invalid_sb_disk_groups;
 			goto err;
 		}
-
-	ret = 0;
 err:
 	kfree(sorted);
-	return 0;
+	return ret;
 }
 
 static void bch2_sb_disk_groups_to_text(struct printbuf *out,
@@ -276,7 +275,7 @@ static int __bch2_disk_group_add(struct bch_sb_handle *sb, unsigned parent,
 
 		groups = bch2_sb_resize_disk_groups(sb, u64s);
 		if (!groups)
-			return -ENOSPC;
+			return -BCH_ERR_ENOSPC_disk_label_add;
 
 		nr_groups = disk_groups_nr(groups);
 	}
@@ -384,32 +383,34 @@ inval:
 	prt_printf(out, "invalid label %u", v);
 }
 
-int bch2_dev_group_set(struct bch_fs *c, struct bch_dev *ca, const char *name)
+int __bch2_dev_group_set(struct bch_fs *c, struct bch_dev *ca, const char *name)
 {
 	struct bch_member *mi;
-	int v = -1;
-	int ret = 0;
-
-	mutex_lock(&c->sb_lock);
+	int ret, v = -1;
 
 	if (!strlen(name) || !strcmp(name, "none"))
-		goto write_sb;
+		return 0;
 
 	v = bch2_disk_path_find_or_create(&c->disk_sb, name);
-	if (v < 0) {
-		mutex_unlock(&c->sb_lock);
+	if (v < 0)
 		return v;
-	}
 
 	ret = bch2_sb_disk_groups_to_cpu(c);
 	if (ret)
-		goto unlock;
-write_sb:
+		return ret;
+
 	mi = &bch2_sb_get_members(c->disk_sb.sb)->members[ca->dev_idx];
 	SET_BCH_MEMBER_GROUP(mi, v + 1);
+	return 0;
+}
 
-	bch2_write_super(c);
-unlock:
+int bch2_dev_group_set(struct bch_fs *c, struct bch_dev *ca, const char *name)
+{
+	int ret;
+
+	mutex_lock(&c->sb_lock);
+	ret = __bch2_dev_group_set(c, ca, name) ?:
+		bch2_write_super(c);
 	mutex_unlock(&c->sb_lock);
 
 	return ret;
@@ -466,10 +467,7 @@ void bch2_opt_target_to_text(struct printbuf *out,
 				: NULL;
 
 			if (ca && percpu_ref_tryget(&ca->io_ref)) {
-				char b[BDEVNAME_SIZE];
-
-				prt_printf(out, "/dev/%s",
-				       bdevname(ca->disk_sb.bdev, b));
+				prt_printf(out, "/dev/%pg", ca->disk_sb.bdev);
 				percpu_ref_put(&ca->io_ref);
 			} else if (ca) {
 				prt_printf(out, "offline device %u", t.dev);

@@ -10,6 +10,10 @@
 # define __always_inline	inline __attribute__((always_inline))
 #endif
 
+#ifndef __attribute_const__
+#define __attribute_const__     __attribute__((__const__))
+#endif
+
 #ifdef __ANDROID__
 /*
  * FIXME: Big hammer to get rid of tons of:

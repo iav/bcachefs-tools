@@ -478,7 +478,7 @@ int bch2_replicas_gc_end(struct bch_fs *c, int ret)
 		    bch2_fs_usage_read_one(c, &c->usage_base->replicas[i])) {
 			n = cpu_replicas_add_entry(&c->replicas_gc, e);
 			if (!n.entries) {
-				ret = -ENOSPC;
+				ret = -ENOMEM;
 				goto err;
 			}
 
@@ -487,10 +487,9 @@ int bch2_replicas_gc_end(struct bch_fs *c, int ret)
 		}
 	}
 
-	if (bch2_cpu_replicas_to_sb_replicas(c, &c->replicas_gc)) {
-		ret = -ENOSPC;
+	ret = bch2_cpu_replicas_to_sb_replicas(c, &c->replicas_gc);
+	if (ret)
 		goto err;
-	}
 
 	ret = replicas_table_update(c, &c->replicas_gc);
 err:
@@ -593,10 +592,9 @@ retry:
 
 	bch2_cpu_replicas_sort(&new);
 
-	if (bch2_cpu_replicas_to_sb_replicas(c, &new)) {
-		ret = -ENOSPC;
+	ret = bch2_cpu_replicas_to_sb_replicas(c, &new);
+	if (ret)
 		goto err;
-	}
 
 	ret = replicas_table_update(c, &new);
 err:
@@ -751,7 +749,7 @@ static int bch2_cpu_replicas_to_sb_replicas_v0(struct bch_fs *c,
 	sb_r = bch2_sb_resize_replicas_v0(&c->disk_sb,
 			DIV_ROUND_UP(bytes, sizeof(u64)));
 	if (!sb_r)
-		return -ENOSPC;
+		return -BCH_ERR_ENOSPC_sb_replicas;
 
 	bch2_sb_field_delete(&c->disk_sb, BCH_SB_FIELD_replicas);
 	sb_r = bch2_sb_get_replicas_v0(c->disk_sb.sb);
@@ -796,7 +794,7 @@ static int bch2_cpu_replicas_to_sb_replicas(struct bch_fs *c,
 	sb_r = bch2_sb_resize_replicas(&c->disk_sb,
 			DIV_ROUND_UP(bytes, sizeof(u64)));
 	if (!sb_r)
-		return -ENOSPC;
+		return -BCH_ERR_ENOSPC_sb_replicas;
 
 	bch2_sb_field_delete(&c->disk_sb, BCH_SB_FIELD_replicas_v0);
 	sb_r = bch2_sb_get_replicas(c->disk_sb.sb);
@@ -836,27 +834,27 @@ static int bch2_cpu_replicas_validate(struct bch_replicas_cpu *cpu_r,
 		if (e->data_type >= BCH_DATA_NR) {
 			prt_printf(err, "invalid data type in entry ");
 			bch2_replicas_entry_to_text(err, e);
-			return -EINVAL;
+			return -BCH_ERR_invalid_sb_replicas;
 		}
 
 		if (!e->nr_devs) {
 			prt_printf(err, "no devices in entry ");
 			bch2_replicas_entry_to_text(err, e);
-			return -EINVAL;
+			return -BCH_ERR_invalid_sb_replicas;
 		}
 
 		if (e->nr_required > 1 &&
 		    e->nr_required >= e->nr_devs) {
 			prt_printf(err, "bad nr_required in entry ");
 			bch2_replicas_entry_to_text(err, e);
-			return -EINVAL;
+			return -BCH_ERR_invalid_sb_replicas;
 		}
 
 		for (j = 0; j < e->nr_devs; j++)
 			if (!bch2_dev_exists(sb, mi, e->devs[j])) {
 				prt_printf(err, "invalid device %u in entry ", e->devs[j]);
 				bch2_replicas_entry_to_text(err, e);
-				return -EINVAL;
+				return -BCH_ERR_invalid_sb_replicas;
 			}
 
 		if (i + 1 < cpu_r->nr) {
@@ -868,7 +866,7 @@ static int bch2_cpu_replicas_validate(struct bch_replicas_cpu *cpu_r,
 			if (!memcmp(e, n, cpu_r->entry_size)) {
 				prt_printf(err, "duplicate replicas entry ");
 				bch2_replicas_entry_to_text(err, e);
-				return -EINVAL;
+				return -BCH_ERR_invalid_sb_replicas;
 			}
 		}
 	}

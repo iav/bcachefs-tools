@@ -293,7 +293,7 @@ void bio_reset(struct bio *bio, struct block_device *bdev, unsigned int opf)
 	atomic_set(&bio->__bi_remaining, 1);
 }
 
-struct bio *bio_kmalloc(gfp_t gfp_mask, unsigned int nr_iovecs)
+struct bio *bio_kmalloc(unsigned int nr_iovecs, gfp_t gfp_mask)
 {
 	struct bio *bio;
 

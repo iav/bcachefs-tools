@@ -203,7 +203,7 @@ static int bch2_sb_journal_seq_blacklist_validate(struct bch_sb *sb,
 		    le64_to_cpu(e->end)) {
 			prt_printf(err, "entry %u start >= end (%llu >= %llu)",
 			       i, le64_to_cpu(e->start), le64_to_cpu(e->end));
-			return -EINVAL;
+			return -BCH_ERR_invalid_sb_journal_seq_blacklist;
 		}
 
 		if (i + 1 < nr &&
@@ -211,7 +211,7 @@ static int bch2_sb_journal_seq_blacklist_validate(struct bch_sb *sb,
 		    le64_to_cpu(e[1].start)) {
 			prt_printf(err, "entry %u out of order with next entry (%llu > %llu)",
 			       i + 1, le64_to_cpu(e[0].end), le64_to_cpu(e[1].start));
-			return -EINVAL;
+			return -BCH_ERR_invalid_sb_journal_seq_blacklist;
 		}
 	}
 
@@ -272,7 +272,7 @@ retry:
 		       !test_bit(BCH_FS_STOPPING, &c->flags))
 			b = bch2_btree_iter_next_node(&iter);
 
-		if (ret == -EINTR)
+		if (bch2_err_matches(ret, BCH_ERR_transaction_restart))
 			goto retry;
 
 		bch2_trans_iter_exit(&trans, &iter);

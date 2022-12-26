@@ -20,6 +20,7 @@
 
 #include "cmds.h"
 #include "libbcachefs.h"
+#include "libbcachefs/errcode.h"
 #include "libbcachefs/opts.h"
 #include "libbcachefs/super-io.h"
 
@@ -64,7 +65,7 @@ int cmd_set_option(int argc, char *argv[])
 
 	struct bch_fs *c = bch2_fs_open(argv, argc, open_opts);
 	if (IS_ERR(c)) {
-		fprintf(stderr, "error opening %s: %s\n", argv[0], strerror(-PTR_ERR(c)));
+		fprintf(stderr, "error opening %s: %s\n", argv[0], bch2_err_str(PTR_ERR(c)));
 		exit(EXIT_FAILURE);
 	}
 

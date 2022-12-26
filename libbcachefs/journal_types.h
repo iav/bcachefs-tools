@@ -141,10 +141,11 @@ enum journal_space_from {
 	journal_space_nr,
 };
 
-enum {
+enum journal_flags {
 	JOURNAL_REPLAY_DONE,
 	JOURNAL_STARTED,
 	JOURNAL_MAY_SKIP_FLUSH,
+	JOURNAL_NEED_FLUSH_WRITE,
 };
 
 #define JOURNAL_WATERMARKS()		\
@@ -176,6 +177,8 @@ enum journal_errors {
 #undef x
 };
 
+typedef DARRAY(u64)		darray_u64;
+
 /* Embedded in struct bch_fs */
 struct journal {
 	/* Fastpath stuff up front: */
@@ -201,6 +204,12 @@ struct journal {
 	unsigned		entry_u64s_reserved;
 
 	unsigned		buf_size_want;
+
+	/*
+	 * We may queue up some things to be journalled (log messages) before
+	 * the journal has actually started - stash them here:
+	 */
+	darray_u64		early_journal_entries;
 
 	/*
 	 * Two journal entries -- one is currently open for new entries, the
