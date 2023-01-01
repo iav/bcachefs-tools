@@ -1,7 +1,10 @@
 name: "NixOS-Tests"
 on:
-  pull_request:
+  workflow_dispatch:
   push:
+    branches: [ master ]
+  pull_request:
+    branches: [ master ]
 jobs:
   nixos-flake-check:
     runs-on: ubuntu-latest
