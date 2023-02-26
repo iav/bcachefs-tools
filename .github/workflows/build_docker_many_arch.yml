@@ -79,7 +79,7 @@ jobs:
           echo SHORTIMAGENAME ${SHORTIMAGENAME}
           docker run --platform ${{ matrix.buildxplatform }} \
             -v ${{ runner.workspace }}:/build ${SHORTIMAGENAME} \
-            sh -c "pwd; cd /build/bcachefs-tools; make; make deb "
+            sh -c ". ~/.profile; pwd; cd /build/bcachefs-tools; make; make deb "
 
     # - name: show vars
       # run: |
