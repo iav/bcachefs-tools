@@ -22,7 +22,7 @@ jobs:
           uuid-dev zlib1g-dev valgrind libudev-dev python3 python3-docutils
           python3-pytest libfuse3-dev 
           devscripts debhelper
-    - uses: actions/checkout@v3
+    - uses: actions/checkout@v3.5.3
     - name: make
       run: make
     - name: make deb
