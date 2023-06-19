@@ -28,7 +28,7 @@ jobs:
           echo "Flags:     ${{ steps.buildx.outputs.flags }}"
           echo "Platforms: ${{ steps.buildx.outputs.platforms }}"
 
-    - uses: actions/checkout@v3
+    - uses: actions/checkout@v3.5.3
     - name: build image
       run: |
           BUILDER=builder
