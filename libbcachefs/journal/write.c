@@ -190,12 +190,40 @@ static void replicas_refs_put(struct bch_fs *c, darray_replicas_entry_refs *refs
 	refs->nr = 0;
 }
 
-static inline u64 last_uncompleted_write_seq(struct journal *j)
+/*
+ * write_done has two-state semantics that matter for concurrent
+ * journal_write_done() callbacks:
+ *
+ *   write_done == false: bio for this seq has completed, but post-completion
+ *	bookkeeping (replicas_refs_put, last_seq_ondisk / flushed_seq_ondisk
+ *	advance) has NOT yet finished, OR we haven't entered the callback for
+ *	this seq yet.
+ *   write_done == true:  ALL post-completion bookkeeping is finished. Safe
+ *	for an unrelated thread to treat the seq as fully flushed.
+ *
+ * The completion loop in journal_write_done() is allowed to drive seqs
+ * forward in two cases:
+ *
+ *   - write_done is set (a prior callback already finished the bookkeeping
+ *     and left this seq queued for a later callback to pop), or
+ *   - seq == seq_completing (we are the callback for this seq, so we own
+ *     its bookkeeping for this iteration of the loop, even though write_done
+ *     isn't set yet - it gets set only after the loop finishes).
+ *
+ * Setting write_done up front would collapse the distinction: a concurrent
+ * journal_write_done() callback could observe write_done == true during
+ * our lock-drop window for replicas_refs_put, advance flushed_seq_ondisk
+ * past our seq, and let going-RO mark the FS clean before our refs are
+ * actually put.
+ */
+static inline u64 last_uncompleted_write_seq(struct journal *j, u64 seq_completing)
 {
-	return !fifo_empty(&j->in_flight) &&
-		fifo_peek_front(&j->in_flight).write_done
-		? j->in_flight.front
-		: 0;
+	if (fifo_empty(&j->in_flight))
+		return 0;
+
+	u64 seq = j->in_flight.front;
+	return (fifo_peek_front(&j->in_flight).write_done || seq == seq_completing)
+		? seq : 0;
 }
 
 static CLOSURE_CALLBACK(journal_write_done)
@@ -267,19 +295,11 @@ static CLOSURE_CALLBACK(journal_write_done)
 	w->data = NULL;
 	w->buf_size = 0;
 
-	/*
-	 * Mark our own write done up front: the seq_ondisk-advance loop
-	 * below gates on write_done, and we need to be visible as done
-	 * whether or not it advances past us in this call (out-of-order
-	 * completions get picked up by a later journal_write_done).
-	 */
-	w->write_done = true;
-
 	bool completed = false;
 	bool last_seq_ondisk_updated = false;
 
 	u64 seq;
-	while ((seq = last_uncompleted_write_seq(j))) {
+	while ((seq = last_uncompleted_write_seq(j, seq_wrote))) {
 		w = journal_seq_to_buf(j, seq);
 
 		if (!j->err_seq && !w->noflush) {
@@ -338,6 +358,25 @@ static CLOSURE_CALLBACK(journal_write_done)
 		BUG_ON(j->in_flight.front != seq);
 		j->in_flight.front++;
 	}
+
+	/*
+	 * Mark our buffer's bookkeeping done. Two cases:
+	 *
+	 *  - The loop above popped past us (front advanced beyond seq_wrote):
+	 *    journal_seq_to_buf() returns NULL, nothing to do - the pop already
+	 *    obviated the need.
+	 *  - The loop stopped before reaching us (some earlier seq is still
+	 *    in flight): we're still in the FIFO, mark write_done so a later
+	 *    journal_write_done() callback can drive its loop through our seq.
+	 *
+	 * Must come after the loop: write_done is the "all bookkeeping done"
+	 * signal. Setting it before the loop opens a race where a concurrent
+	 * callback observes us as fully done during our lock-drop window for
+	 * replicas_refs_put.
+	 */
+	struct journal_buf *w_wrote = journal_seq_to_buf(j, seq_wrote);
+	if (w_wrote)
+		w_wrote->write_done = true;
 
 	j->pin.front = min(j->pin.back, j->last_seq_ondisk);
 
@@ -535,7 +574,7 @@ static int bch2_journal_write_prep(struct journal *j, struct journal_buf *w)
 	struct bch_fs *c = container_of(j, struct bch_fs, journal);
 	struct jset_entry *start, *end;
 	struct jset *jset = w->data;
-	struct journal_keys_to_wb wb = { NULL };
+	struct journal_keys_to_wb wb = {};
 	unsigned u64s;
 	unsigned long btree_roots_have = 0;
 	u64 seq = le64_to_cpu(jset->seq);
@@ -579,7 +618,7 @@ static int bch2_journal_write_prep(struct journal *j, struct journal_buf *w)
 		case BCH_JSET_ENTRY_write_buffer_keys:
 			EBUG_ON(!w->need_flush_to_write_buffer);
 
-			if (!wb.wb)
+			if (!wb.seq)
 				bch2_journal_keys_to_write_buffer_start(c, &wb, seq);
 
 			jset_entry_for_each_key(i, k) {
@@ -596,7 +635,7 @@ static int bch2_journal_write_prep(struct journal *j, struct journal_buf *w)
 		}
 	}
 
-	if (wb.wb) {
+	if (wb.seq) {
 		ret = bch2_journal_keys_to_write_buffer_end(c, &wb);
 		if (ret) {
 			bch2_fs_fatal_error(c, "error flushing journal keys to btree write buffer: %s",

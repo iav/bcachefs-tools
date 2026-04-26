@@ -12,18 +12,16 @@ struct btree_iter;
 
 void bch2_recalc_btree_reserve(struct bch_fs *);
 
-void bch2_btree_node_to_freelist(struct bch_fs *, struct btree *);
 void bch2_btree_node_mem_free(struct bch_fs *, struct btree *);
 
-void __bch2_btree_node_hash_remove(struct bch_fs_btree_cache *, struct btree *);
-void bch2_btree_node_hash_remove(struct bch_fs_btree_cache *, struct btree *);
-
-int __bch2_btree_node_hash_insert(struct bch_fs_btree_cache *, struct btree *);
-int bch2_btree_node_hash_insert(struct bch_fs_btree_cache *, struct btree *,
-				unsigned, enum btree_id);
+int bch2_btree_node_transition_state(struct bch_fs_btree_cache *, struct btree *,
+				     enum btree_node_cache_state);
 
 void bch2_node_pin(struct bch_fs *, struct btree *);
 void bch2_btree_cache_unpin(struct bch_fs *);
+
+void bch2_btree_node_set_dirty(struct bch_fs *, struct btree *);
+void bch2_btree_node_write_done_clean(struct bch_fs *, struct btree *);
 
 void bch2_btree_node_update_key_early(struct btree_trans *, enum btree_id, unsigned,
 				      struct bkey_s_c, struct bkey_i *);
@@ -31,7 +29,7 @@ void bch2_btree_node_update_key_early(struct btree_trans *, enum btree_id, unsig
 void bch2_btree_cache_cannibalize_unlock(struct btree_trans *);
 int bch2_btree_cache_cannibalize_lock(struct btree_trans *, struct closure *);
 
-void bch2_btree_node_data_free_locked(struct btree *);
+void bch2_btree_node_data_free(struct btree *);
 struct btree *__bch2_btree_node_mem_alloc(struct bch_fs *);
 struct btree *bch2_btree_node_mem_alloc(struct btree_trans *, bool);
 
@@ -78,6 +76,22 @@ static inline struct btree *btree_node_mem_ptr(const struct bkey_i *k)
 static inline bool btree_node_hashed(struct btree *b)
 {
 	return b->hash_val != 0;
+}
+
+static inline enum btree_node_cache_state btree_node_cache_state(struct btree *b)
+{
+	return b->cache_state;
+}
+
+/* CLEAN or DIRTY based on the dirty flag — for transitions that re-attach
+ * a live node without altering its dirty status (e.g. unhash/rehash for
+ * key updates).
+ */
+static inline enum btree_node_cache_state btree_node_live_state(const struct btree *b)
+{
+	return btree_node_dirty(b)
+		? BTREE_NODE_CACHE_DIRTY
+		: BTREE_NODE_CACHE_CLEAN;
 }
 
 #define for_each_cached_btree(_b, _c, _tbl, _iter, _pos)		\

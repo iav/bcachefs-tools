@@ -72,6 +72,21 @@ struct btree_bkey_cached_common {
 	bool			cached;
 };
 
+/*
+ * Membership state of a struct btree in the btree node cache.
+ *
+ * Stored in b->cache_state and maintained by bch2_btree_node_transition_state().
+ * See the DOC block at the top of btree/cache.c for the state machine and
+ * the bookkeeping each state implies.
+ */
+enum btree_node_cache_state {
+	BTREE_NODE_CACHE_NONE,		/* off all lists; not in cache (kzalloc default) */
+	BTREE_NODE_CACHE_FREED,		/* on bc->freed_{pcpu,nonpcpu}; no data buffer */
+	BTREE_NODE_CACHE_FREEABLE,	/* on bc->freeable; has data; not hashed */
+	BTREE_NODE_CACHE_CLEAN,		/* on bc->live[pinned].clean; hashed; has data */
+	BTREE_NODE_CACHE_DIRTY,		/* on bc->live[pinned].dirty; hashed; has data */
+};
+
 struct btree {
 	struct btree_bkey_cached_common c;
 
@@ -139,6 +154,8 @@ struct btree {
 
 	/* lru list */
 	struct list_head	list;
+
+	enum btree_node_cache_state cache_state;
 };
 
 enum btree_node_sibling {
@@ -155,6 +172,7 @@ enum btree_node_sibling {
 	x(dirty)				\
 	x(read_in_flight)			\
 	x(write_in_flight)			\
+	x(permanent)				\
 	x(noevict)				\
 	x(write_blocked)			\
 	x(will_make_reachable)			\
@@ -170,8 +188,16 @@ enum bch_btree_cache_not_freed_reasons {
 struct btree_cache_list {
 	unsigned		idx;
 	struct shrinker		*shrink;
-	size_t			nr;
+	size_t			nr_clean;
+	size_t			nr_dirty;
+	struct list_head	clean;
+	struct list_head	dirty;
 };
+
+static inline size_t btree_cache_list_nr(const struct btree_cache_list *l)
+{
+	return l->nr_clean + l->nr_dirty;
+}
 
 struct btree_root {
 	struct btree		*b;
@@ -207,14 +233,12 @@ struct bch_fs_btree_cache {
 	struct list_head	freeable;
 	struct list_head	freed_pcpu;
 	struct list_head	freed_nonpcpu;
-	struct list_head	list;
 	struct btree_cache_list	live[2];
 
 	size_t			nr_vmalloc;
 	size_t			nr_freeable;
 	size_t			nr_reserve;
 	size_t			nr_by_btree[BTREE_ID_NR];
-	atomic_long_t		nr_dirty;
 
 	/* shrinker stats */
 	size_t			nr_freed;
@@ -568,7 +592,6 @@ struct btree_trans {
 	bool			locked:1;
 	bool			write_locked:1;
 	bool			srcu_held:1;
-	bool			migrate_disable_held:1;
 	bool			pf_memalloc_nofs:1;
 	bool			used_mempool:1;
 	bool			in_traverse_all:1;
@@ -731,7 +754,7 @@ enum btree_flags {
 };
 
 #define x(flag)								\
-static inline bool btree_node_ ## flag(struct btree *b)			\
+static inline bool btree_node_ ## flag(const struct btree *b)		\
 {	return test_bit(BTREE_NODE_ ## flag, &b->flags); }		\
 									\
 static inline void set_btree_node_ ## flag(struct btree *b)		\
@@ -780,7 +803,18 @@ struct bch_fs_btree {
 
 	struct bch_fs_btree_cache		cache;
 	struct bch_fs_btree_key_cache		key_cache;
-	struct bch_fs_btree_write_buffer	write_buffer;
+	/*
+	 * One per BTREE_IS_write_buffer btree (indexed by BCH_WB_BTREE_*, see
+	 * bch_wb_btree_idx()). Each instance has its own intake/flushing
+	 * buffers and locks.
+	 */
+	struct bch_fs_btree_write_buffer	write_buffer[BCH_WB_BTREE_NR];
+	/*
+	 * Shared workqueue for parallelizing the write-buffer fastpath across
+	 * CPUs once the sorted key list crosses a threshold. WQ_MEM_RECLAIM
+	 * because the WB flush sits in the journal-reclaim path.
+	 */
+	struct workqueue_struct			*write_buffer_wq;
 	struct bch_fs_btree_trans		trans;
 	struct bch_fs_btree_reserve_cache	reserve_cache;
 	struct bch_fs_btree_interior_updates	interior_updates;

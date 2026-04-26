@@ -441,8 +441,11 @@ static inline bool __journal_pin_drop(struct journal *j,
 		j->flush_in_progress_dropped = true;
 
 	pin_list = journal_seq_pin(j, pin->seq);
-	pin->seq = 0;
 	list_del_init(&pin->list);
+	/*
+	 * Don't clear pin->seq here; caller may be updating the pin, and we
+	 * don't want other threads to see pin->seq in an intermediate state
+	 */
 
 	if (j->reclaim_flush_wait.list.first)
 		__closure_wake_up(&j->reclaim_flush_wait);
@@ -461,6 +464,7 @@ void bch2_journal_pin_drop(struct journal *j,
 	guard(spinlock)(&j->lock);
 	if (__journal_pin_drop(j, pin))
 		bch2_journal_update_last_seq(j);
+	pin->seq = 0;
 }
 
 static enum journal_pin_type journal_pin_type(struct journal_entry_pin *pin,
@@ -789,16 +793,18 @@ static int __bch2_journal_reclaim(struct journal *j, bool direct, bool kicked)
 		if (journal_low_on_space(j))
 			min_nr = 1;
 
-		size_t btree_cache_live = bc->live[0].nr + bc->live[1].nr;
-		if (atomic_long_read(&bc->nr_dirty) * 2 > btree_cache_live)
+		size_t btree_cache_live = btree_cache_list_nr(&bc->live[0]) +
+					  btree_cache_list_nr(&bc->live[1]);
+		size_t btree_cache_dirty = bc->live[0].nr_dirty + bc->live[1].nr_dirty;
+		if (btree_cache_dirty * 2 > btree_cache_live)
 			min_nr = 1;
 
 		min_key_cache = min(bch2_nr_btree_keys_need_flush(c), (size_t) 128);
 
 		event_inc_trace(c, journal_reclaim_start, buf, ({
 			prt_printf(&buf, "direct %u kicked %u\n", direct, kicked);
-			prt_printf(&buf, "btree cache %lu/%zu min %zu\n",
-				   atomic_long_read(&bc->nr_dirty), btree_cache_live, min_nr);
+			prt_printf(&buf, "btree cache %zu/%zu min %zu\n",
+				   btree_cache_dirty, btree_cache_live, min_nr);
 			prt_printf(&buf, "key cache %lu/%lu min %zu\n",
 				   atomic_long_read(&c->btree.key_cache.nr_dirty),
 				   atomic_long_read(&c->btree.key_cache.nr_keys),

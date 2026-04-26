@@ -322,7 +322,6 @@ static void __bch2_fs_read_only(struct bch_fs *c)
 	bch2_maybe_schedule_btree_bitmap_gc_stop(c);
 	bch2_fs_ec_stop(c);
 	bch2_open_buckets_stop(c, NULL, true);
-	bch2_reconcile_stop(c);
 	bch2_copygc_stop(c);
 	bch2_btree_write_buffer_stop(c);
 	bch2_fs_ec_flush(c);
@@ -336,8 +335,9 @@ static void __bch2_fs_read_only(struct bch_fs *c)
 
 		bch2_do_discards_going_ro(c);
 
-		if (bch2_btree_interior_updates_flush(c) ||
-		    bch2_btree_write_buffer_flush_going_ro(c) ||
+		if (bch2_btree_write_buffer_flush_going_ro(c) ||
+		    bch2_btree_key_cache_flush_going_ro(c) ||
+		    bch2_btree_interior_updates_flush(c) ||
 		    bch2_journal_flush_all_pins(&c->journal) ||
 		    bch2_btree_flush_all_writes(c) ||
 		    seq != atomic64_read(&c->journal.seq)) {
@@ -388,6 +388,14 @@ void bch2_fs_read_only(struct bch_fs *c)
 	bch_verbose(c, "going read-only");
 
 	/*
+	 * Stop background kthreads that issue writes (reconcile, etc.)
+	 * before disabling c->writes; otherwise they can dispatch
+	 * data_update operations that fail with erofs_no_writes once
+	 * c->writes is stopped, and the failure-rate threshold trips.
+	 */
+	bch2_reconcile_stop(c);
+
+	/*
 	 * Block new foreground-end write operations from starting - any new
 	 * writes will return -EROFS:
 	 */
@@ -433,10 +441,12 @@ void bch2_fs_read_only(struct bch_fs *c)
 	    c->recovery.pass_done >= BCH_RECOVERY_PASS_journal_replay) {
 		BUG_ON(c->journal.last_empty_seq != journal_cur_seq(&c->journal));
 		BUG_ON(!c->sb.clean);
-		BUG_ON(atomic_long_read(&c->btree.cache.nr_dirty));
+		BUG_ON(c->btree.cache.live[0].nr_dirty || c->btree.cache.live[1].nr_dirty);
 		BUG_ON(atomic_long_read(&c->btree.key_cache.nr_dirty));
-		BUG_ON(c->btree.write_buffer.inc.keys.nr);
-		BUG_ON(c->btree.write_buffer.flushing.keys.nr);
+		for (unsigned i = 0; i < BCH_WB_BTREE_NR; i++) {
+			BUG_ON(c->btree.write_buffer[i].inc.keys.nr);
+			BUG_ON(c->btree.write_buffer[i].flushing.keys.nr);
+		}
 		bch2_verify_replicas_refs_clean(c);
 		bch2_verify_accounting_clean(c);
 	} else {

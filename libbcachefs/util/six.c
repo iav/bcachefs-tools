@@ -522,7 +522,7 @@ static struct six_lock_wait_fifo *alloc_wait_fifo(struct six_lock *lock, u16 *ne
 		return NULL;
 
 	*new_size = old_size * 2;
-	return kmalloc(struct_size(wf, data, *new_size), GFP_KERNEL);
+	return kzalloc(struct_size(wf, data, *new_size), GFP_KERNEL);
 }
 
 noinline

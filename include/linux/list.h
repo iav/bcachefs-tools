@@ -48,6 +48,29 @@ static inline void list_splice_init(struct list_head *list,
 	INIT_LIST_HEAD(list);
 }
 
+static inline void list_splice_tail(struct list_head *list,
+				    struct list_head *head)
+{
+	if (!list_empty(list)) {
+		struct list_head *first = list->next;
+		struct list_head *last = list->prev;
+		struct list_head *prev = head->prev;
+
+		first->prev = prev;
+		prev->next = first;
+
+		last->next = head;
+		head->prev = last;
+	}
+}
+
+static inline void list_splice_tail_init(struct list_head *list,
+					 struct list_head *head)
+{
+	list_splice_tail(list, head);
+	INIT_LIST_HEAD(list);
+}
+
 #define list_last_entry(ptr, type, member) \
 	list_entry((ptr)->prev, type, member)
 

@@ -256,8 +256,7 @@ static void bch2_btree_node_free_inmem(struct btree_trans *trans,
 
 	__btree_node_free(trans, b);
 
-	scoped_guard(mutex, &c->btree.cache.lock)
-		bch2_btree_node_hash_remove(&c->btree.cache, b);
+	bch2_btree_node_transition_state(&c->btree.cache, b, BTREE_NODE_CACHE_FREEABLE);
 
 	bch2_trans_node_drop(trans, b);
 }
@@ -277,11 +276,10 @@ static void bch2_btree_node_free_never_used(struct btree_update *as,
 
 	clear_btree_node_will_make_reachable(b);
 	clear_btree_node_accessed(b);
-	clear_btree_node_dirty_acct(c, b);
+	clear_btree_node_dirty(b);
 	clear_btree_node_need_write(b);
 
-	scoped_guard(mutex, &c->btree.cache.lock)
-		__bch2_btree_node_hash_remove(&c->btree.cache, b);
+	bch2_btree_node_transition_state(&c->btree.cache, b, BTREE_NODE_CACHE_NONE);
 
 	BUG_ON(p->nr >= ARRAY_SIZE(p->b));
 	p->b[p->nr++] = b;
@@ -403,7 +401,9 @@ out:
 
 	return b;
 err:
-	bch2_btree_node_to_freelist(c, b);
+	bch2_btree_node_transition_state(&c->btree.cache, b, BTREE_NODE_CACHE_FREEABLE);
+	six_unlock_write(&b->c.lock);
+	six_unlock_intent(&b->c.lock);
 	return ERR_PTR(ret);
 }
 
@@ -424,7 +424,7 @@ static struct btree *bch2_btree_node_alloc(struct btree_update *as,
 	/* Both intent and write were held across parking on prealloc_nodes. */
 
 	set_btree_node_accessed(b);
-	set_btree_node_dirty_acct(c, b);
+	bch2_btree_node_set_dirty(c, b);
 	set_btree_node_need_write(b);
 
 	bch2_bset_init_first(b, &b->data->keys);
@@ -451,7 +451,7 @@ static struct btree *bch2_btree_node_alloc(struct btree_update *as,
 
 	bch2_btree_build_aux_trees(b);
 
-	ret = bch2_btree_node_hash_insert(&c->btree.cache, b, level, as->btree_id);
+	ret = bch2_btree_node_transition_state(&c->btree.cache, b, btree_node_live_state(b));
 	BUG_ON(ret);
 
 	trace_btree_node(c, b, btree_node_alloc);
@@ -544,7 +544,10 @@ static void bch2_btree_reserve_put(struct btree_update *as, struct btree_trans *
 
 			/* Both intent and write were held across prealloc. */
 			__btree_node_free(trans, b);
-			bch2_btree_node_to_freelist(c, b);
+			bch2_btree_node_transition_state(&c->btree.cache, b,
+							 BTREE_NODE_CACHE_FREEABLE);
+			six_unlock_write(&b->c.lock);
+			six_unlock_intent(&b->c.lock);
 		}
 	}
 }
@@ -711,6 +714,14 @@ static int btree_update_nodes_written_trans(struct btree_trans *trans,
 	struct bch_fs *c = trans->c;
 	struct bch_inode_opts opts;
 	bch2_inode_opts_get(as->c, &opts, true);
+
+	/*
+	 * Our caller uses BCH_TRANS_COMMIT_no_check_rw, so after emergency
+	 * read-only nothing else gates this path. Bail explicitly: running the
+	 * alloc info triggers below for an interior update whose journal half
+	 * won't land underflows bucket sector counts.
+	 */
+	try(bch2_journal_error(&c->journal));
 
 	trans->journal_pin = &as->journal;
 
@@ -1175,7 +1186,7 @@ static void bch2_btree_interior_update_will_free_node(struct btree_update *as,
 		closure_wake_up(&c->btree.interior_updates.wait);
 	}
 
-	clear_btree_node_dirty_acct(c, b);
+	clear_btree_node_dirty(b);
 	clear_btree_node_need_write(b);
 	clear_btree_node_write_blocked(b);
 
@@ -1433,11 +1444,14 @@ err:
 
 static void bch2_btree_set_root_inmem(struct bch_fs *c, struct btree *b)
 {
-	/* Root nodes cannot be reaped */
-	scoped_guard(mutex, &c->btree.cache.lock) {
+	/*
+	 * Root nodes cannot be reaped. The flag (rather than off-list
+	 * placement) is the mechanism: the reclaim path checks
+	 * btree_node_permanent and skips. Roots stay on bc->list,
+	 * counted normally; cache_exit's teardown sweep finds them.
+	 */
+	scoped_guard(mutex, &c->btree.cache.lock)
 		set_btree_node_permanent(b);
-		list_del_init(&b->list);
-	}
 
 	scoped_guard(mutex, &c->btree.cache.root_lock)
 		bch2_btree_id_root(c, b->c.btree_id)->b = b;
@@ -1503,7 +1517,8 @@ static void bch2_insert_fixup_btree_ptr(struct btree_update *as,
 		bch2_btree_node_iter_advance(node_iter, b);
 
 	bch2_btree_bset_insert_key(trans, path, b, node_iter, insert);
-	set_btree_node_dirty_acct(c, b);
+	if (!btree_node_dirty(b))
+		bch2_btree_node_set_dirty(c, b);
 
 	old = READ_ONCE(b->flags);
 	do {
@@ -2062,14 +2077,14 @@ static int __btree_increase_depth(struct btree_update *as, struct btree_trans *t
 	bch2_btree_node_unlock_write(trans, path, b);
 
 	/*
-	 * Old root is no longer a root: clear permanent so the add helpers
-	 * will let it onto live/clean. Add to live now; the clean list will
-	 * be rejoined when/if clear_btree_node_dirty_acct fires.
+	 * Old root is no longer a root: clearing permanent makes it
+	 * eligible for reclaim again. The node stayed hashed and on
+	 * bc->list throughout its tenure as root (it was protected by
+	 * the flag, not by being off-list), so no list/hash work is
+	 * needed here.
 	 */
-	scoped_guard(mutex, &c->btree.cache.lock) {
+	scoped_guard(mutex, &c->btree.cache.lock)
 		clear_btree_node_permanent(b);
-		BUG_ON(bch2_btree_node_hash_insert(&c->btree.cache, b, b->c.level, b->c.btree_id));
-	}
 
 	bch2_trans_verify_locks(trans);
 	return 0;
@@ -2749,8 +2764,7 @@ int bch2_btree_root_alloc_fake_trans(struct btree_trans *trans, enum btree_id id
 	b->data->format = bch2_btree_calc_format(b);
 	btree_node_set_format(b, b->data->format);
 
-	ret = bch2_btree_node_hash_insert(&c->btree.cache, b,
-					  b->c.level, b->c.btree_id);
+	ret = bch2_btree_node_transition_state(&c->btree.cache, b, btree_node_live_state(b));
 	BUG_ON(ret);
 
 	bch2_btree_set_root_inmem(c, b);
