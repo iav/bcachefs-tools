@@ -558,40 +558,58 @@ int bch2_btree_key_cache_journal_flush(struct journal *j,
 	struct bkey_cached *ck =
 		container_of(pin, struct bkey_cached, journal);
 	struct bkey_cached_key key;
-	int srcu_idx = srcu_read_lock(&c->btree.trans.barrier);
 	int ret = 0;
 
-	CLASS(btree_trans, trans)(c);
+	guard(srcu)(&c->btree.trans.barrier);
 
-	ret = lockrestart_do(trans, ({
-		int _ret = btree_node_lock_nopath(trans, &ck->c, SIX_LOCK_read, _THIS_IP_);
-		bool do_flush = false;
+	/*
+	 * Lockless bailout: if the pin has already been updated past @seq, or
+	 * the key isn't dirty, there's nothing to do. False negatives (we miss
+	 * work) are fine — reclaim retries. Avoids taking ck's intent lock on
+	 * the hot reclaim path when there's nothing to do.
+	 *
+	 * The intent lock taken below serializes against
+	 * btree_key_cache_flush_pos(), which reads ck->journal.seq while the
+	 * cached path's intent lock is held: a read lock here would let
+	 * pin_update advance the pin out from under that reader, leaving it
+	 * with a captured ck->journal.seq < j->last_seq and BUG'ing in
+	 * bch2_journal_pin_set() once the trans commit fed it back in.
+	 */
+	if (READ_ONCE(ck->journal.seq) == seq &&
+	    test_bit(BKEY_CACHED_DIRTY, &ck->flags)) {
+		CLASS(btree_trans, trans)(c);
 
-		if (!_ret) {
-			key = ck->key;
+		ret = lockrestart_do(trans, ({
+			btree_path_idx_t path_idx;
+			int _ret = bch2_btree_node_lock_with_path(trans, &ck->c,
+								  SIX_LOCK_intent, &path_idx);
+			bool do_flush = false;
 
-			if (ck->journal.seq != seq ||
-			    !test_bit(BKEY_CACHED_DIRTY, &ck->flags)) {
-				/* nothing to do */
-			} else if (ck->seq != seq) {
-				bch2_journal_pin_update(&c->journal, ck->seq, &ck->journal,
-							bch2_btree_key_cache_journal_flush);
-			} else {
-				do_flush = true;
+			if (!_ret) {
+				key = ck->key;
+
+				if (ck->journal.seq != seq ||
+				    !test_bit(BKEY_CACHED_DIRTY, &ck->flags)) {
+					/* raced; nothing to do */
+				} else if (ck->seq != seq) {
+					bch2_journal_pin_update(&c->journal, ck->seq, &ck->journal,
+								bch2_btree_key_cache_journal_flush);
+				} else {
+					do_flush = true;
+				}
+				bch2_btree_node_unlock_with_path(trans, path_idx, 0);
+
+				if (do_flush)
+					_ret = btree_key_cache_flush_pos(trans, key, seq,
+							BCH_TRANS_COMMIT_journal_reclaim, false);
 			}
-			six_unlock_read(&ck->c.lock);
-
-			if (do_flush)
-				_ret = btree_key_cache_flush_pos(trans, key, seq,
-						BCH_TRANS_COMMIT_journal_reclaim, false);
-		}
-		_ret;
-	}));
-	bch2_fs_fatal_err_on(ret &&
-			     !bch2_err_matches(ret, BCH_ERR_journal_reclaim_would_deadlock) &&
-			     !bch2_journal_error(j), c,
-			     "flushing key cache: %s", bch2_err_str(ret));
-	srcu_read_unlock(&c->btree.trans.barrier, srcu_idx);
+			_ret;
+		}));
+		bch2_fs_fatal_err_on(ret &&
+				     !bch2_err_matches(ret, BCH_ERR_journal_reclaim_would_deadlock) &&
+				     !bch2_journal_error(j), c,
+				     "flushing key cache: %s", bch2_err_str(ret));
+	}
 	return ret;
 }
 
@@ -603,6 +621,8 @@ static int bkey_cached_key_cmp(const void *_l, const void *_r)
 	return  cmp_int(l->btree_id, r->btree_id) ?:
 		bpos_cmp(l->pos, r->pos);
 }
+
+DEFINE_DARRAY_NAMED(bkey_cached_keys, struct bkey_cached_key);
 
 /*
  * Going RO: flush every dirty key cache entry to the btree, dropping its
@@ -618,14 +638,14 @@ static int bkey_cached_key_cmp(const void *_l, const void *_r)
 int bch2_btree_key_cache_flush_going_ro(struct bch_fs *c)
 {
 	struct bch_fs_btree_key_cache *bc = &c->btree.key_cache;
-	int ret = 0;
 
 	if (!atomic_long_read(&bc->nr_dirty) ||
 	    bch2_journal_error(&c->journal))
 		return 0;
 
-	DARRAY(struct bkey_cached_key) keys = {};
-	int srcu_idx = srcu_read_lock(&c->btree.trans.barrier);
+	guard(srcu)(&c->btree.trans.barrier);
+	CLASS(btree_trans, trans)(c);
+	CLASS(bkey_cached_keys, keys)();
 	bool any_done = false, full;
 
 	/*
@@ -633,46 +653,40 @@ int bch2_btree_key_cache_flush_going_ro(struct bch_fs *c)
 	 * dirties); on push failure under rcu we just flush what we have and
 	 * walk again to find the rest.
 	 */
-	ret = darray_resize(&keys, atomic_long_read(&bc->nr_dirty) + 64);
-	if (ret)
-		goto out;
-
-	CLASS(btree_trans, trans)(c);
+	try(darray_resize(&keys, atomic_long_read(&bc->nr_dirty) + 64));
 
 	do {
 		full = false;
 		keys.nr = 0;
 
-		rcu_read_lock();
-		struct bucket_table *tbl =
-			rht_dereference_rcu(bc->table.tbl, &bc->table);
+		scoped_guard(rcu) {
+			struct bucket_table *tbl =
+				rht_dereference_rcu(bc->table.tbl, &bc->table);
 
-		/*
-		 * If a rehash is in flight some entries live on the new
-		 * table; skip this pass and let the OR-chain re-call us.
-		 */
-		if (unlikely(tbl->nest)) {
-			rcu_read_unlock();
-			goto out;
-		}
+			/*
+			 * If a rehash is in flight some entries live on the new
+			 * table; skip this pass and let the OR-chain re-call us.
+			 */
+			if (unlikely(tbl->nest))
+				return any_done;
 
-		for (unsigned i = 0; i < tbl->size; i++) {
-			struct rhash_head *pos;
-			struct bkey_cached *ck;
+			for (unsigned i = 0; i < tbl->size; i++) {
+				struct rhash_head *pos;
+				struct bkey_cached *ck;
 
-			rht_for_each_entry_rcu(ck, pos, tbl, i, hash) {
-				if (!test_bit(BKEY_CACHED_DIRTY, &ck->flags))
-					continue;
+				rht_for_each_entry_rcu(ck, pos, tbl, i, hash) {
+					if (!test_bit(BKEY_CACHED_DIRTY, &ck->flags))
+						continue;
 
-				if (darray_push_gfp(&keys, ck->key,
-						    GFP_NOWAIT|__GFP_NOWARN)) {
-					full = true;
-					goto out_rcu;
+					if (darray_push_gfp(&keys, ck->key,
+							    GFP_NOWAIT|__GFP_NOWARN)) {
+						full = true;
+						goto rcu_done;
+					}
 				}
 			}
+rcu_done:;
 		}
-out_rcu:
-		rcu_read_unlock();
 
 		if (!keys.nr)
 			break;
@@ -680,23 +694,21 @@ out_rcu:
 		darray_sort(keys, bkey_cached_key_cmp);
 
 		darray_for_each(keys, k) {
-			ret = lockrestart_do(trans,
+			int ret = lockrestart_do(trans,
 				btree_key_cache_flush_pos(trans, *k, 0,
 					BCH_TRANS_COMMIT_no_journal_res, false));
 			if (ret &&
 			    !bch2_err_matches(ret, BCH_ERR_journal_reclaim_would_deadlock) &&
 			    !bch2_journal_error(&c->journal)) {
 				bch_err_fn(c, ret);
-				goto out;
+				return ret;
 			}
 			ret = 0;
 		}
 		any_done = true;
 	} while (full);
-out:
-	darray_exit(&keys);
-	srcu_read_unlock(&c->btree.trans.barrier, srcu_idx);
-	return ret ?: any_done;
+
+	return any_done;
 }
 
 bool bch2_btree_insert_key_cached(struct btree_trans *trans,
@@ -797,11 +809,10 @@ static unsigned long bch2_btree_key_cache_scan(struct shrinker *shrink,
 	struct bkey_cached *ck;
 	size_t scanned = 0, freed = 0, nr = sc->nr_to_scan;
 	unsigned iter, start;
-	int srcu_idx;
 
 	u64 start_time = local_clock();
-	srcu_idx = srcu_read_lock(&c->btree.trans.barrier);
-	rcu_read_lock();
+	guard(srcu)(&c->btree.trans.barrier);
+	guard(rcu)();
 
 	tbl = rht_dereference_rcu(bc->table.tbl, &bc->table);
 
@@ -812,11 +823,8 @@ static unsigned long bch2_btree_key_cache_scan(struct shrinker *shrink,
 	 * A rehash could still start while we're scanning - that's ok, we'll
 	 * still see most elements.
 	 */
-	if (unlikely(tbl->nest)) {
-		rcu_read_unlock();
-		srcu_read_unlock(&c->btree.trans.barrier, srcu_idx);
+	if (unlikely(tbl->nest))
 		return SHRINK_STOP;
-	}
 
 	iter = bc->shrink_iter;
 	if (iter >= tbl->size)
@@ -862,8 +870,6 @@ static unsigned long bch2_btree_key_cache_scan(struct shrinker *shrink,
 out:
 	bc->shrink_iter = iter;
 
-	rcu_read_unlock();
-	srcu_read_unlock(&c->btree.trans.barrier, srcu_idx);
 	bch2_time_stats_update(&c->times[BCH_TIME_btree_key_cache_scan], start_time);
 
 	return freed;
@@ -903,26 +909,27 @@ void bch2_fs_btree_key_cache_exit(struct bch_fs_btree_key_cache *bc)
 	 * The loop is needed to guard against racing with rehash:
 	 */
 	while (atomic_long_read(&bc->nr_keys)) {
-		rcu_read_lock();
-		tbl = rht_dereference_rcu(bc->table.tbl, &bc->table);
-		if (tbl) {
-			if (tbl->nest) {
-				/* wait for in progress rehash */
-				rcu_read_unlock();
-				mutex_lock(&bc->table.mutex);
-				mutex_unlock(&bc->table.mutex);
-				continue;
-			}
-			for (i = 0; i < tbl->size; i++)
-				while (pos = rht_ptr_rcu(&tbl->buckets[i]), !rht_is_a_nulls(pos)) {
-					ck = container_of(pos, struct bkey_cached, hash);
-					BUG_ON(!bkey_cached_evict(bc, ck));
-					kfree(ck->k);
-					six_lock_exit(&ck->c.lock);
-					kmem_cache_free(bch2_key_cache, ck);
+		scoped_guard(rcu) {
+			tbl = rht_dereference_rcu(bc->table.tbl, &bc->table);
+			if (tbl) {
+				if (tbl->nest) {
+					/* wait for in progress rehash */
+					goto rehash_wait;
 				}
+				for (i = 0; i < tbl->size; i++)
+					while (pos = rht_ptr_rcu(&tbl->buckets[i]), !rht_is_a_nulls(pos)) {
+						ck = container_of(pos, struct bkey_cached, hash);
+						BUG_ON(!bkey_cached_evict(bc, ck));
+						kfree(ck->k);
+						six_lock_exit(&ck->c.lock);
+						kmem_cache_free(bch2_key_cache, ck);
+					}
+			}
 		}
-		rcu_read_unlock();
+		continue;
+rehash_wait:
+		mutex_lock(&bc->table.mutex);
+		mutex_unlock(&bc->table.mutex);
 	}
 
 	if (atomic_long_read(&bc->nr_dirty) &&
