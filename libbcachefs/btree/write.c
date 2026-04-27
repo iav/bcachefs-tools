@@ -75,9 +75,11 @@ static void __btree_node_write_done(struct bch_fs *c, struct btree *b, u64 start
 		}
 	} while (!try_cmpxchg(&b->flags, &old, new));
 
-	if (new & (1U << BTREE_NODE_write_in_flight))
+	if (new & (1U << BTREE_NODE_write_in_flight)) {
+		/* Re-arm: bit stays set across the new write, no counter change. */
 		__bch2_btree_node_write(c, b, BTREE_WRITE_ALREADY_STARTED|type);
-	else {
+	} else {
+		atomic_long_dec(&c->btree.cache.nr_in_flight);
 		bch2_btree_node_write_done_clean(c, b);
 		smp_mb__after_atomic();
 		wake_up_bit(&b->flags, BTREE_NODE_write_in_flight);
@@ -138,7 +140,15 @@ static void btree_node_write_work(struct work_struct *work)
 
 	CLASS(btree_trans, trans)(c);
 
-	if (!wbio->wbio.first_btree_write || wbio->wbio.failed.nr) {
+	/*
+	 * btree_node_write_update_key commits through the journal; on a dead
+	 * journal that commit fails with journal_shutdown and there's no
+	 * point burning lockrestart_do cycles trying. Skip the update — the
+	 * read lock + __btree_node_write_done step below still runs so
+	 * BTREE_NODE_write_in_flight clears and flushers/cancellers drain.
+	 */
+	if (!bch2_journal_error(&c->journal) &&
+	    (!wbio->wbio.first_btree_write || wbio->wbio.failed.nr)) {
 		int ret = lockrestart_do(trans, btree_node_write_update_key(trans, wbio, b));
 		if (ret)
 			set_btree_node_noevict(b);
@@ -328,6 +338,8 @@ void __bch2_btree_node_write(struct bch_fs *c, struct btree *b, unsigned flags)
 		new |=  (1 << BTREE_NODE_just_written);
 		new ^=  (1 << BTREE_NODE_write_idx);
 	} while (!try_cmpxchg_acquire(&b->flags, &old, new));
+
+	atomic_long_inc(&c->btree.cache.nr_in_flight);
 
 	if (new & (1U << BTREE_NODE_need_write))
 		return;
@@ -687,24 +699,72 @@ void bch2_btree_init_next(struct btree_trans *trans, struct btree *b)
 
 static bool __bch2_btree_flush_all(struct bch_fs *c, unsigned flag)
 {
-	struct bucket_table *tbl;
-	struct rhash_head *pos;
-	struct btree *b;
-	unsigned i;
+	struct bch_fs_btree_cache *bc = &c->btree.cache;
 	bool ret = false;
 
-	if (!c->btree.cache.table_init_done)
+	if (!bc->table_init_done)
 		return false;
-restart:
-	rcu_read_lock();
-	for_each_cached_btree(b, c, tbl, i, pos)
-		if (test_bit(flag, &b->flags)) {
-			rcu_read_unlock();
-			wait_on_bit_io(&b->flags, flag, TASK_UNINTERRUPTIBLE);
-			ret = true;
-			goto restart;
-		}
-	rcu_read_unlock();
+
+	/*
+	 * Each pass below picks one still-flagged node, drops the iteration
+	 * lock, then waits for the bit to clear before re-walking. We don't
+	 * want to hold rcu_read_lock or bc->lock across an arbitrarily-long
+	 * wait.
+	 */
+
+	/* Hashed pass: walk the rhashtable. */
+	while (true) {
+		struct bucket_table *tbl;
+		struct rhash_head *pos;
+		struct btree *waiting = NULL, *b;
+		unsigned i;
+
+		rcu_read_lock();
+		for_each_cached_btree(b, c, tbl, i, pos)
+			if (test_bit(flag, &b->flags)) {
+				waiting = b;
+				break;
+			}
+		rcu_read_unlock();
+
+		if (!waiting)
+			break;
+
+		wait_on_bit_io(&waiting->flags, flag, TASK_UNINTERRUPTIBLE);
+		ret = true;
+	}
+
+	/*
+	 * Freeable pass.
+	 *
+	 * The cache state machine permits FREEABLE nodes to have a write in
+	 * flight: bch2_btree_node_write_done_clean only transitions DIRTY →
+	 * CLEAN when the node is currently DIRTY, so when reclaim moves a
+	 * node to FREEABLE while its write is still in flight the node
+	 * legitimately stays on bc->freeable until the write finishes (see
+	 * the comment on bch2_btree_node_write_done_clean).
+	 *
+	 * for_each_cached_btree iterates the rhashtable, which doesn't
+	 * include hash-removed (FREEABLE / FREED) nodes, so the pass above
+	 * misses these. Wait on bc->freeable too — going-RO needs drained
+	 * writes for the BUG_ONs in bch2_fs_btree_cache_exit's freeable walk.
+	 */
+	while (true) {
+		struct btree *waiting = NULL, *b;
+
+		scoped_guard(mutex, &bc->lock)
+			list_for_each_entry(b, &bc->freeable, list)
+				if (test_bit(flag, &b->flags)) {
+					waiting = b;
+					break;
+				}
+
+		if (!waiting)
+			break;
+
+		wait_on_bit_io(&waiting->flags, flag, TASK_UNINTERRUPTIBLE);
+		ret = true;
+	}
 
 	return ret;
 }
@@ -717,6 +777,51 @@ bool bch2_btree_flush_all_reads(struct bch_fs *c)
 bool bch2_btree_flush_all_writes(struct bch_fs *c)
 {
 	return __bch2_btree_flush_all(c, BTREE_NODE_write_in_flight);
+}
+
+/*
+ * Force-complete in-flight btree writes when a clean shutdown can't finish
+ * (journal in error / emergency RO).
+ *
+ * The clean-shutdown loop in __bch2_fs_read_only relies on dirty nodes being
+ * written out through the normal journal-flush path; when the journal is dead
+ * those writes can't make progress and dirty nodes are stuck. Walk live[].dirty
+ * (the only place dirty nodes can live — see the invariant assertion in
+ * bch2_btree_node_transition_state_locked) and:
+ *
+ *   - clear BTREE_NODE_dirty so __btree_node_write_done's cmpxchg, when an
+ *     in-flight write of one of these nodes finishes, won't re-arm the write
+ *   - settle cache_state from the bits via btree_node_live_state(): nodes
+ *     with write_in_flight still set stay DIRTY (the transition is a no-op),
+ *     nodes with neither bit set move to CLEAN
+ *
+ * Then wait for any actual in-flight writes to drain. btree_node_write_work
+ * fast-paths on bch2_journal_error() so even on a dead journal write_in_flight
+ * gets cleared (synchronously via the !rearm branch of __btree_node_write_done),
+ * which then calls bch2_btree_node_write_done_clean to complete the
+ * DIRTY → CLEAN transition.
+ *
+ * Caller must guarantee bch2_journal_error() is set so the work fast-paths
+ * and so no new writes are submitted concurrently.
+ */
+void bch2_btree_cancel_all_writes(struct bch_fs *c)
+{
+	struct bch_fs_btree_cache *bc = &c->btree.cache;
+
+	if (!bc->table_init_done)
+		return;
+
+	scoped_guard(mutex, &bc->lock) {
+		for (unsigned i = 0; i < ARRAY_SIZE(bc->live); i++) {
+			struct btree *b, *t;
+			list_for_each_entry_safe(b, t, &bc->live[i].dirty, list) {
+				clear_btree_node_dirty(b);
+				bch2_btree_node_transition_state_locked(bc, b, btree_node_live_state(b));
+			}
+		}
+	}
+
+	bch2_btree_flush_all_writes(c);
 }
 
 static const char * const bch2_btree_write_types[] = {

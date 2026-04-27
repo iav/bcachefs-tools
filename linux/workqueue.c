@@ -279,6 +279,14 @@ bool cancel_delayed_work_sync(struct delayed_work *dwork)
 	return ret;
 }
 
+void drain_workqueue(struct workqueue_struct *wq)
+{
+	pthread_mutex_lock(&wq_lock);
+	while (!list_empty(&wq->pending_work) || wq->current_work)
+		pthread_cond_wait(&work_finished, &wq_lock);
+	pthread_mutex_unlock(&wq_lock);
+}
+
 void destroy_workqueue(struct workqueue_struct *wq)
 {
 	if (wq->worker)

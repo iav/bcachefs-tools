@@ -371,8 +371,8 @@ static inline bool btree_node_state_has_buffer(enum btree_node_cache_state state
 	       state == BTREE_NODE_CACHE_FREEABLE;
 }
 
-static int bch2_btree_node_transition_state_locked(struct bch_fs_btree_cache *bc, struct btree *b,
-						   enum btree_node_cache_state new)
+int bch2_btree_node_transition_state_locked(struct bch_fs_btree_cache *bc, struct btree *b,
+					    enum btree_node_cache_state new)
 {
 	enum btree_node_cache_state old = b->cache_state;
 	bool pinned = btree_node_pinned(b);
@@ -389,6 +389,14 @@ static int bch2_btree_node_transition_state_locked(struct bch_fs_btree_cache *bc
 	BUG_ON((btree_node_state_has_buffer(old) ||
 		btree_node_state_has_buffer(new)) &&
 	       !b->data);
+	/*
+	 * BTREE_NODE_dirty is meaningful only while a node is hashed (CLEAN /
+	 * DIRTY); once unhashed (FREEABLE / FREED) it must already be clear.
+	 * The dirty bit is what makes the cache_state DIRTY, so a FREEABLE
+	 * node with the bit set is an inconsistent state — and consumers that
+	 * need to scrub dirty nodes can rely on walking only live[].dirty.
+	 */
+	EBUG_ON(!btree_node_state_hashed(new) && btree_node_dirty(b));
 
 	if (old == new)
 		return 0;
@@ -488,23 +496,23 @@ void bch2_btree_node_set_dirty(struct bch_fs *c, struct btree *b)
 }
 
 /*
- * Write fully completed (no re-arm): transition cache_state DIRTY →
- * CLEAN. Caller holds read lock on @b. Skipped when:
- *   - the dirty flag is still set: the no-rearm cmpxchg can fire with
- *     dirty=1 when other gating bits (write_blocked,
- *     will_make_reachable, never_write) disqualify re-arm; the node
- *     legitimately stays DIRTY and the next write cycle handles it.
- *   - the node isn't in DIRTY state: a btree node can be on the
- *     freeable list with a write still in flight, in which case we
- *     don't want to drag it back to CLEAN.
+ * Settle a hashed node's cache_state from its current flag bits. Called from
+ * the !rearm branch of __btree_node_write_done after the cmpxchg has cleared
+ * write_in_flight; if the dirty bit is also clear the node moves to CLEAN,
+ * otherwise btree_node_live_state returns DIRTY and the transition is a
+ * no-op.
+ *
+ * Skipped when the node isn't in a hashed state — e.g. a node can sit on the
+ * freeable list with a write still in flight, and we don't want to drag it
+ * back into the live lists.
  */
 void bch2_btree_node_write_done_clean(struct bch_fs *c, struct btree *b)
 {
 	struct bch_fs_btree_cache *bc = &c->btree.cache;
 
 	guard(mutex)(&bc->lock);
-	if (b->cache_state == BTREE_NODE_CACHE_DIRTY && !btree_node_dirty(b))
-		bch2_btree_node_transition_state_locked(bc, b, BTREE_NODE_CACHE_CLEAN);
+	if (btree_node_state_hashed(b->cache_state))
+		bch2_btree_node_transition_state_locked(bc, b, btree_node_live_state(b));
 }
 
 int bch2_btree_node_transition_state(struct bch_fs_btree_cache *bc, struct btree *b,
@@ -1562,6 +1570,16 @@ void bch2_fs_btree_cache_exit(struct bch_fs *c)
 	shrinker_free(bc->live[1].shrink);
 	shrinker_free(bc->live[0].shrink);
 
+	/*
+	 * btree_node_write_work clears BTREE_NODE_write_in_flight before
+	 * releasing its read lock on the node, so flush_all_writes returning
+	 * doesn't guarantee the lock is unheld. Drain the workqueue so the
+	 * walks below can rely on trylock succeeding without racing with
+	 * still-finishing post-write work.
+	 */
+	if (c->btree.write_complete_wq)
+		drain_workqueue(c->btree.write_complete_wq);
+
 	/* vfree() can allocate memory: */
 	scoped_guard(memalloc_flags, PF_MEMALLOC_NOFS) {
 		guard(mutex)(&bc->lock);
@@ -1732,6 +1750,7 @@ void bch2_btree_cache_to_text(struct printbuf *out, const struct bch_fs_btree_ca
 	prt_btree_cache_line(out, c, "reserve:",	bc->nr_reserve);
 	prt_btree_cache_line(out, c, "freeable:",	bc->nr_freeable);
 	prt_btree_cache_line(out, c, "dirty:",		bc->live[0].nr_dirty + bc->live[1].nr_dirty);
+	prt_btree_cache_line(out, c, "in flight:",	atomic_long_read(&bc->nr_in_flight));
 	prt_printf(out, "cannibalize lock:\t%s\n",	bc->alloc_lock ? "held" : "not held");
 	prt_newline(out);
 
